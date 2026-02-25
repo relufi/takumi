@@ -72,9 +72,9 @@ fn blend_plus_darker(bottom: &mut Rgba<u8>, top: Rgba<u8>) {
   let top_premul = premultiply_alpha_imm(top);
   let bottom_premul = premultiply_alpha_imm(*bottom);
 
-  bottom.0[0] = top_premul.0[0].saturating_sub(bottom_premul.0[0]);
-  bottom.0[1] = top_premul.0[1].saturating_sub(bottom_premul.0[1]);
-  bottom.0[2] = top_premul.0[2].saturating_sub(bottom_premul.0[2]);
+  bottom.0[0] = ((top_premul.0[0] as u16 + bottom_premul.0[0] as u16).saturating_sub(255)) as u8;
+  bottom.0[1] = ((top_premul.0[1] as u16 + bottom_premul.0[1] as u16).saturating_sub(255)) as u8;
+  bottom.0[2] = ((top_premul.0[2] as u16 + bottom_premul.0[2] as u16).saturating_sub(255)) as u8;
   bottom.0[3] = result_alpha;
 }
 
@@ -415,4 +415,33 @@ fn set_sat(mut color: [f32; 3], saturation: f32) -> [f32; 3] {
   }
   color[min_idx] = 0.0;
   color
+}
+
+#[cfg(test)]
+mod tests {
+  use image::Rgba;
+
+  use crate::{layout::style::BlendMode, rendering::blend::blend_pixel};
+
+  // https://github.com/kane50613/takumi/issues/447
+  #[test]
+  fn plus_lighter_issue_447() {
+    let mut bottom = Rgba([0xF5, 0xB1, 0x2D, 0xFF]);
+    let top = Rgba([0xFF, 0xFF, 0xFF, 0x7F]);
+
+    blend_pixel(&mut bottom, top, BlendMode::PlusLighter);
+
+    assert_eq!(bottom, Rgba([0xFF, 0xFF, 0xAC, 0xFF]));
+  }
+
+  // https://github.com/kane50613/takumi/issues/501
+  #[test]
+  fn plus_darker_issue_501() {
+    let mut bottom = Rgba([0x96, 0x77, 0x00, 0xFF]);
+    let top = Rgba([0xFF, 0xFF, 0xFF, 0xFF]);
+
+    blend_pixel(&mut bottom, top, BlendMode::PlusDarker);
+
+    assert_eq!(bottom, Rgba([0x96, 0x77, 0x00, 0xFF]));
+  }
 }
