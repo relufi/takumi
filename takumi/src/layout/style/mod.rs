@@ -208,7 +208,7 @@ impl RawCssUnexpected {
 
   #[cold]
   #[inline(never)]
-  fn as_invalid_type<T, E, R>(self) -> Result<R, E>
+  fn as_invalid_type<T, E, R>(&self) -> Result<R, E>
   where
     T: for<'i> FromCss<'i>,
     E: de::Error,
