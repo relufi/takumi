@@ -179,7 +179,7 @@ impl<'i> FromCss<'i> for GradientStops {
         match (first_position, second_position) {
           (Some(first_position), Some(second_position)) => {
             stops.push(GradientStop::ColorHint {
-              color: color.clone(),
+              color,
               hint: Some(first_position),
             });
             stops.push(GradientStop::ColorHint {
