@@ -77,7 +77,7 @@ impl<Nodes: Node<Nodes>> Node<Nodes> for ImageNode {
   fn measure(
     &self,
     context: &RenderContext,
-    _available_space: Size<AvailableSpace>,
+    available_space: Size<AvailableSpace>,
     known_dimensions: Size<Option<f32>>,
     style: &taffy::Style,
   ) -> Size<f32> {
@@ -85,7 +85,7 @@ impl<Nodes: Node<Nodes>> Node<Nodes> for ImageNode {
       return Size::zero();
     };
 
-    let image_size = match &*image {
+    let intrinsic_size = match &*image {
       #[cfg(feature = "svg")]
       ImageSource::Svg(svg) => Size {
         width: svg.size().width(),
@@ -97,24 +97,38 @@ impl<Nodes: Node<Nodes>> Node<Nodes> for ImageNode {
       },
     };
 
-    let overridden_size = Size {
-      width: self.width.unwrap_or(image_size.width) * context.sizing.viewport.device_pixel_ratio,
-      height: self.height.unwrap_or(image_size.height) * context.sizing.viewport.device_pixel_ratio,
+    let preferred_size = Size {
+      width: self.width.unwrap_or(intrinsic_size.width)
+        * context.sizing.viewport.device_pixel_ratio,
+      height: self.height.unwrap_or(intrinsic_size.height)
+        * context.sizing.viewport.device_pixel_ratio,
     };
 
-    let aspect_ratio = style
-      .aspect_ratio
-      .unwrap_or(overridden_size.width / overridden_size.height);
+    let known_dimensions = if should_skip_intrinsic_probe_cross_axis_ratio_transfer(
+      self,
+      available_space,
+      known_dimensions,
+      style,
+    ) {
+      // During flex min/max-content probing, a stretched cross-size should not
+      // determine this replaced element's intrinsic main-size.
+      known_dimensions
+    } else {
+      let aspect_ratio = style.aspect_ratio.or_else(|| {
+        (preferred_size.height != 0.0).then_some(preferred_size.width / preferred_size.height)
+      });
+      known_dimensions.maybe_apply_aspect_ratio(aspect_ratio)
+    };
 
     if let Size {
       width: Some(width),
       height: Some(height),
-    } = known_dimensions.maybe_apply_aspect_ratio(Some(aspect_ratio))
+    } = known_dimensions
     {
       return Size { width, height };
     }
 
-    overridden_size
+    preferred_size
   }
 
   fn draw_content(
@@ -134,6 +148,32 @@ impl<Nodes: Node<Nodes>> Node<Nodes> for ImageNode {
   fn get_style(&self) -> Option<&Style> {
     self.style.as_ref()
   }
+
+  fn is_replaced_element(&self) -> bool {
+    true
+  }
+}
+
+fn should_skip_intrinsic_probe_cross_axis_ratio_transfer(
+  node: &ImageNode,
+  available_space: Size<AvailableSpace>,
+  known_dimensions: Size<Option<f32>>,
+  style: &taffy::Style,
+) -> bool {
+  node.width.is_none()
+    && node.height.is_none()
+    && style.size.width.is_auto()
+    && style.size.height.is_auto()
+    && ((matches!(
+      available_space.width,
+      AvailableSpace::MinContent | AvailableSpace::MaxContent
+    ) && known_dimensions.width.is_none()
+      && known_dimensions.height.is_some())
+      || (matches!(
+        available_space.height,
+        AvailableSpace::MinContent | AvailableSpace::MaxContent
+      ) && known_dimensions.height.is_none()
+        && known_dimensions.width.is_some()))
 }
 
 const DATA_URI_PREFIX: &str = "data:";
