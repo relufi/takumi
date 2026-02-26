@@ -115,7 +115,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -194,7 +194,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -233,7 +233,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -277,7 +277,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -320,7 +320,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -372,7 +372,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
           bun-download-url: ${{ matrix.settings.bun-binary-url }}
@@ -410,7 +410,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -443,7 +443,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -496,7 +496,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
@@ -568,7 +568,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: kane50613/setup-bun@main
         with:
           bun-version: latest
 
