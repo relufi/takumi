@@ -9,7 +9,7 @@ use taffy::{Point, Rect, Size, prelude::FromLength};
 use crate::{
   layout::{
     inline::InlineBrush,
-    style::{CssGlobalKeyword, CssValue, RawCssValueSeed, parse_css_value_from_raw, properties::*},
+    style::{CssGlobalKeyword, CssValue, RawCssInput, RawCssValueSeed, properties::*},
   },
   rendering::{RenderContext, SizedShadow, Sizing},
 };
@@ -175,6 +175,7 @@ macro_rules! define_style {
         self
       }
 
+      #[inline(never)]
       pub(crate) fn merge_into(&self, style: &mut Style) {
         match (&self.property, &self.value) {
           (PropertyId::Ignored, StyleDeclarationValue::Ignored) => {}
@@ -226,18 +227,14 @@ macro_rules! define_style {
             let mut style = Style::default();
 
             while let Some(key) = map.next_key::<Cow<'de, str>>()? {
-              match PropertyId::from_camel_case(&key) {
-                PropertyId::Ignored => {
-                  map.next_value::<IgnoredAny>()?;
-                  continue;
-                },
-                $(
-                  PropertyId::$property => {
-                    let raw_value = map.next_value_seed(RawCssValueSeed)?;
-                    style.$property = parse_css_value_from_raw(raw_value)?;
-                  }
-                )*
+              let property = PropertyId::from_camel_case(&key);
+              if matches!(property, PropertyId::Ignored) {
+                map.next_value::<IgnoredAny>()?;
+                continue;
               }
+
+              let raw_value = map.next_value_seed(RawCssValueSeed)?;
+              style.set_property_from_raw::<A::Error>(property, raw_value)?;
             }
 
             Ok(style)
@@ -261,10 +258,29 @@ macro_rules! define_style {
         $(
           define_style_apply_clears!(self, other, $property $(, [$($merge_clear),*])?);
         )*
-
         $(
           self.$property = other.$property.or(std::mem::take(&mut self.$property));
         )*
+      }
+
+      #[inline(never)]
+      fn set_property_from_raw<'de, E>(
+        &mut self,
+        property: PropertyId,
+        raw_value: RawCssInput<'de>,
+      ) -> Result<(), E>
+      where
+        E: serde::de::Error,
+      {
+        match property {
+          PropertyId::Ignored => Ok(()),
+          $(
+            PropertyId::$property => {
+              self.$property = CssValue::from_raw(raw_value)?;
+              Ok(())
+            }
+          )*
+        }
       }
     }
 

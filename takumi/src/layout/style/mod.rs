@@ -37,6 +37,18 @@ pub enum CssGlobalKeyword {
   Unset,
 }
 
+impl CssGlobalKeyword {
+  #[inline(never)]
+  fn from_str(value: &str) -> Option<Self> {
+    match_ignore_ascii_case! {value,
+      "initial" => Some(Self::Initial),
+      "inherit" => Some(Self::Inherit),
+      "unset" => Some(Self::Unset),
+      _ => None,
+    }
+  }
+}
+
 impl<T, const DEFAULT_INHERIT: bool> From<T> for CssValue<T, DEFAULT_INHERIT> {
   fn from(value: T) -> Self {
     CssValue::Value(value)
@@ -105,10 +117,70 @@ impl<T: Default, const DEFAULT_INHERIT: bool> CssValue<T, DEFAULT_INHERIT> {
 
 impl<T: Copy, const DEFAULT_INHERIT: bool> Copy for CssValue<T, DEFAULT_INHERIT> {}
 
+impl<T, const DEFAULT_INHERIT: bool> CssValue<T, DEFAULT_INHERIT> {
+  #[inline(never)]
+  pub(super) fn from_raw<'de, E>(raw: RawCssInput<'de>) -> Result<Self, E>
+  where
+    T: for<'i> FromCss<'i>,
+    E: de::Error,
+  {
+    match raw {
+      RawCssInput::Str(value) => match CssGlobalKeyword::from_str(value.as_ref()) {
+        Some(keyword) => Ok(Self::Keyword(keyword)),
+        None => match T::from_str(value.as_ref()) {
+          Ok(parsed) => Ok(Self::Value(parsed)),
+          Err(_) => css_invalid_string::<T, E, Self>(value.as_ref()),
+        },
+      },
+      RawCssInput::Number(number) => {
+        let source = number.to_string();
+        match T::from_str(&source) {
+          Ok(parsed) => Ok(Self::Value(parsed)),
+          Err(_) => number.as_invalid::<T, E, Self>(),
+        }
+      }
+      RawCssInput::Unexpected(unexpected) => unexpected.as_invalid_type::<T, E, Self>(),
+    }
+  }
+}
+
 pub(super) enum RawCssNumber {
   Signed(i64),
   Unsigned(u64),
   Float(f64),
+}
+
+impl std::fmt::Display for RawCssNumber {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self {
+      RawCssNumber::Signed(value) => value.fmt(f),
+      RawCssNumber::Unsigned(value) => value.fmt(f),
+      RawCssNumber::Float(value) => value.fmt(f),
+    }
+  }
+}
+
+impl RawCssNumber {
+  #[cold]
+  #[inline(never)]
+  fn unexpected(&self) -> de::Unexpected<'_> {
+    match self {
+      RawCssNumber::Signed(value) => de::Unexpected::Signed(*value),
+      RawCssNumber::Unsigned(value) => de::Unexpected::Unsigned(*value),
+      RawCssNumber::Float(value) => de::Unexpected::Float(*value),
+    }
+  }
+
+  #[cold]
+  #[inline(never)]
+  fn as_invalid<T, E, R>(&self) -> Result<R, E>
+  where
+    T: for<'i> FromCss<'i>,
+    E: de::Error,
+  {
+    let expected = css_expected_message::<T>();
+    Err(E::invalid_type(self.unexpected(), &expected))
+  }
 }
 
 pub(super) enum RawCssUnexpected {
@@ -132,6 +204,17 @@ impl RawCssUnexpected {
       Self::Map => de::Unexpected::Map,
       Self::Other(kind) => de::Unexpected::Other(kind),
     }
+  }
+
+  #[cold]
+  #[inline(never)]
+  fn as_invalid_type<T, E, R>(self) -> Result<R, E>
+  where
+    T: for<'i> FromCss<'i>,
+    E: de::Error,
+  {
+    let expected = css_expected_message::<T>();
+    Err(E::invalid_type(self.as_serde_unexpected(), &expected))
   }
 }
 
@@ -289,25 +372,6 @@ impl<'de> DeserializeSeed<'de> for RawCssValueSeed {
   }
 }
 
-#[inline(never)]
-fn parse_css_global_keyword(value: &str) -> Option<CssGlobalKeyword> {
-  match_ignore_ascii_case! {value,
-    "initial" => Some(CssGlobalKeyword::Initial),
-    "inherit" => Some(CssGlobalKeyword::Inherit),
-    "unset" => Some(CssGlobalKeyword::Unset),
-    _ => None,
-  }
-}
-
-#[inline(never)]
-fn raw_css_number_to_string(number: &RawCssNumber) -> String {
-  match number {
-    RawCssNumber::Signed(value) => value.to_string(),
-    RawCssNumber::Unsigned(value) => value.to_string(),
-    RawCssNumber::Float(value) => value.to_string(),
-  }
-}
-
 struct CssExpectedMessage<'a> {
   #[cfg(feature = "detailed_css_error")]
   message: Cow<'a, str>,
@@ -356,17 +420,6 @@ where
 
 #[cold]
 #[inline(never)]
-fn css_invalid_type<T, E, R>(unexpected: RawCssUnexpected) -> Result<R, E>
-where
-  T: for<'i> FromCss<'i>,
-  E: de::Error,
-{
-  let expected = css_expected_message::<T>();
-  Err(E::invalid_type(unexpected.as_serde_unexpected(), &expected))
-}
-
-#[cold]
-#[inline(never)]
 fn css_invalid_string<T, E, R>(value: &str) -> Result<R, E>
 where
   T: for<'i> FromCss<'i>,
@@ -374,54 +427,4 @@ where
 {
   let expected = css_expected_message::<T>();
   Err(E::invalid_value(de::Unexpected::Str(value), &expected))
-}
-
-#[cold]
-#[inline(never)]
-fn raw_css_number_unexpected(number: &RawCssNumber) -> de::Unexpected<'_> {
-  match number {
-    RawCssNumber::Signed(value) => de::Unexpected::Signed(*value),
-    RawCssNumber::Unsigned(value) => de::Unexpected::Unsigned(*value),
-    RawCssNumber::Float(value) => de::Unexpected::Float(*value),
-  }
-}
-
-#[cold]
-#[inline(never)]
-fn css_invalid_number<T, E, R>(number: &RawCssNumber) -> Result<R, E>
-where
-  T: for<'i> FromCss<'i>,
-  E: de::Error,
-{
-  let expected = css_expected_message::<T>();
-  let unexpected = raw_css_number_unexpected(number);
-  Err(E::invalid_type(unexpected, &expected))
-}
-
-pub(super) fn parse_css_value_from_raw<'de, T, E, const DEFAULT_INHERIT: bool>(
-  raw: RawCssInput<'de>,
-) -> Result<CssValue<T, DEFAULT_INHERIT>, E>
-where
-  T: for<'i> FromCss<'i>,
-  E: de::Error,
-{
-  match raw {
-    RawCssInput::Str(value) => match parse_css_global_keyword(value.as_ref()) {
-      Some(keyword) => Ok(CssValue::Keyword(keyword)),
-      None => match T::from_str(value.as_ref()) {
-        Ok(parsed) => Ok(CssValue::Value(parsed)),
-        Err(_) => css_invalid_string::<T, E, CssValue<T, DEFAULT_INHERIT>>(value.as_ref()),
-      },
-    },
-    RawCssInput::Number(number) => {
-      let source = raw_css_number_to_string(&number);
-      match T::from_str(&source) {
-        Ok(parsed) => Ok(CssValue::Value(parsed)),
-        Err(_) => css_invalid_number::<T, E, CssValue<T, DEFAULT_INHERIT>>(&number),
-      }
-    }
-    RawCssInput::Unexpected(unexpected) => {
-      css_invalid_type::<T, E, CssValue<T, DEFAULT_INHERIT>>(unexpected)
-    }
-  }
 }
