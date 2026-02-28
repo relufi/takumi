@@ -117,8 +117,8 @@ impl VerticalAlign {
             };
           }
 
-          if let Length::Calc(handle) = length {
-            let linear = handle.resolve_linear(sizing);
+          if let Length::Calc(formula) = length {
+            let linear = formula.resolve(sizing);
             let (px, percent) = linear.components();
 
             return ResolvedVerticalAlign::BaselineShift {

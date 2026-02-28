@@ -64,13 +64,6 @@ pub struct CalcLinear {
 }
 
 impl CalcLinear {
-  fn neg(self) -> Self {
-    Self {
-      px: -self.px,
-      percent: -self.percent,
-    }
-  }
-
   fn resolve(self, basis: f32) -> f32 {
     self.px + self.percent * basis
   }
@@ -322,7 +315,7 @@ impl CalcFormula {
     }
   }
 
-  fn resolve(self, sizing: &Sizing) -> CalcLinear {
+  pub(crate) fn resolve(self, sizing: &Sizing) -> CalcLinear {
     let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
     let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
     let viewport_min = viewport_width.min(viewport_height);
@@ -359,24 +352,6 @@ impl CalcFormula {
 enum CalcValue {
   Number(f32),
   Formula(CalcFormula),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-/// Internal handle used by `Length::Calc`.
-pub enum CalcHandle {
-  /// Internal handle for a parsed calc formula.
-  Formula(CalcFormula),
-  /// Internal handle for a resolved linear calc expression.
-  Linear(CalcLinear),
-}
-
-impl CalcHandle {
-  pub(crate) fn resolve_linear(self, sizing: &Sizing) -> CalcLinear {
-    match self {
-      Self::Formula(formula) => formula.resolve(sizing),
-      Self::Linear(linear) => linear,
-    }
-  }
 }
 
 fn parse_calc_sum<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, CalcValue> {
@@ -576,7 +551,7 @@ pub enum Length<const DEFAULT_AUTO: bool = true> {
   /// Specific pixel value
   Px(f32),
   /// calc(...) expression
-  Calc(CalcHandle),
+  Calc(CalcFormula),
 }
 
 impl<const DEFAULT_AUTO: bool> Default for Length<DEFAULT_AUTO> {
@@ -675,10 +650,7 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
       Length::Pt(v) => Length::Pt(-v),
       Length::Pc(v) => Length::Pc(-v),
       Length::Px(v) => Length::Px(-v),
-      Length::Calc(CalcHandle::Formula(formula)) => {
-        Length::Calc(CalcHandle::Formula(formula.neg()))
-      }
-      Length::Calc(CalcHandle::Linear(linear)) => Length::Calc(CalcHandle::Linear(linear.neg())),
+      Length::Calc(formula) => Length::Calc(formula.neg()),
     }
   }
 }
@@ -702,7 +674,7 @@ impl<'i, const DEFAULT_AUTO: bool> FromCss<'i> for Length<DEFAULT_AUTO> {
       Token::Function(function) if function.eq_ignore_ascii_case("calc") => {
         match input.parse_nested_block(parse_calc_sum)? {
           CalcValue::Number(value) => Ok(Self::Px(value)),
-          CalcValue::Formula(formula) => Ok(Self::Calc(CalcHandle::Formula(formula))),
+          CalcValue::Formula(formula) => Ok(Self::Calc(formula)),
         }
       }
       Token::Dimension { value, unit, .. } => {
@@ -791,7 +763,7 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
       Length::Pt(value) => value * ONE_PT_IN_PX,
       Length::Pc(value) => value * ONE_PC_IN_PX,
       // Calc linear values are already in device pixels.
-      Length::Calc(handle) => handle.resolve_linear(sizing).resolve(percentage_full_px),
+      Length::Calc(formula) => formula.resolve(sizing).resolve(percentage_full_px),
     }
   }
 
@@ -835,8 +807,8 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
         let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
         CompactLength::length(viewport_width.max(viewport_height) * value / 100.0)
       }
-      Length::Calc(handle) => {
-        let linear = handle.resolve_linear(sizing);
+      Length::Calc(formula) => {
+        let linear = formula.resolve(sizing);
 
         if is_near_zero(linear.percent) {
           return CompactLength::length(linear.px);
@@ -911,7 +883,7 @@ impl<const DEFAULT_AUTO: bool> MakeComputed for Length<DEFAULT_AUTO> {
       return;
     }
 
-    if let Self::Calc(CalcHandle::Formula(formula)) = *self {
+    if let Self::Calc(formula) = *self {
       let linear = formula.resolve(sizing);
 
       if is_near_zero(linear.percent) {
@@ -923,8 +895,6 @@ impl<const DEFAULT_AUTO: bool> MakeComputed for Length<DEFAULT_AUTO> {
         *self = Self::Percentage(linear.percent * 100.0);
         return;
       }
-
-      *self = Self::Calc(CalcHandle::Linear(linear));
     }
   }
 }
@@ -958,14 +928,14 @@ mod tests {
   }
 
   #[test]
-  fn parse_calc_mixed_returns_formula_handle() {
+  fn parse_calc_mixed_returns_formula() {
     assert_eq!(
       Length::<true>::from_str("calc(100% - 12px)"),
-      Ok(Length::Calc(CalcHandle::Formula(CalcFormula {
+      Ok(Length::Calc(CalcFormula {
         percent: 1.0,
         px: -12.0,
         ..Default::default()
-      })))
+      }))
     );
   }
 
@@ -989,11 +959,11 @@ mod tests {
 
   #[test]
   fn negative_calc_keeps_value_sign_consistent() {
-    let value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+    let value: Length<true> = Length::Calc(CalcFormula {
       percent: 0.5,
       px: 10.0,
       ..Default::default()
-    }));
+    });
     let negated = -value;
     let sizing = sizing();
     assert_near(value.to_px(&sizing, 200.0), 120.0);
@@ -1002,22 +972,22 @@ mod tests {
 
   #[test]
   fn make_computed_collapses_formula_without_percent_to_px() {
-    let mut value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+    let mut value: Length<true> = Length::Calc(CalcFormula {
       rem: 1.0,
       px: 5.0,
       ..Default::default()
-    }));
+    });
     value.make_computed(&sizing());
     assert_eq!(value, Length::Px(21.0));
   }
 
   #[test]
   fn make_computed_collapsed_px_applies_dpr_only_once_in_to_px() {
-    let mut value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+    let mut value: Length<true> = Length::Calc(CalcFormula {
       rem: 1.0,
       px: 5.0,
       ..Default::default()
-    }));
+    });
     let sizing = sizing();
     value.make_computed(&sizing);
 
@@ -1027,38 +997,39 @@ mod tests {
 
   #[test]
   fn make_computed_collapses_formula_with_only_percent_to_percentage() {
-    let mut value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+    let mut value: Length<true> = Length::Calc(CalcFormula {
       percent: 0.5,
       ..Default::default()
-    }));
+    });
     value.make_computed(&sizing());
     assert_eq!(value, Length::Percentage(50.0));
   }
 
   #[test]
-  fn make_computed_keeps_mixed_formula_as_linear_calc() {
-    let mut value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+  fn make_computed_keeps_mixed_formula_as_calc() {
+    let mut value: Length<true> = Length::Calc(CalcFormula {
       percent: 0.5,
       px: 10.0,
       ..Default::default()
-    }));
+    });
     value.make_computed(&sizing());
     assert_eq!(
       value,
-      Length::Calc(CalcHandle::Linear(CalcLinear {
-        px: 20.0,
+      Length::Calc(CalcFormula {
         percent: 0.5,
-      }))
+        px: 10.0,
+        ..Default::default()
+      })
     );
   }
 
   #[test]
   fn compact_length_calc_pointer_resolves_through_callback() {
-    let value: Length<true> = Length::Calc(CalcHandle::Formula(CalcFormula {
+    let value: Length<true> = Length::Calc(CalcFormula {
       percent: 0.5,
       px: 10.0,
       ..Default::default()
-    }));
+    });
     let sizing = sizing();
     let compact = value.to_compact_length(&sizing);
     assert!(compact.is_calc());
@@ -1117,12 +1088,12 @@ mod tests {
     let parsed = Length::<true>::from_str("calc(20cqmax + 5px - 2cqb)");
     assert_eq!(
       parsed,
-      Ok(Length::Calc(CalcHandle::Formula(CalcFormula {
+      Ok(Length::Calc(CalcFormula {
         cqmax: 20.0,
         cqh: -2.0,
         px: 5.0,
         ..Default::default()
-      })))
+      }))
     );
   }
 
