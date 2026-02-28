@@ -1,4 +1,4 @@
-use std::{iter::Copied, mem::take, slice::Iter};
+use std::{iter::Copied, mem::take, slice::Iter, vec::IntoIter};
 
 use taffy::{
   AvailableSpace, Cache, CacheTree, Display as TaffyDisplay, Layout, LayoutBlockContainer,
@@ -20,7 +20,7 @@ use crate::{
       create_inline_layout, measure_inline_layout,
     },
     node::{Node, NodeStyleLayers},
-    style::{Affine, Display, ResolvedStyle, Style as NodeStyle},
+    style::{Affine, Color, Display, ResolvedStyle, Style as NodeStyle},
   },
   rendering::{
     Canvas, MaxHeight, RenderContext, Sizing,
@@ -624,13 +624,11 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
   pub fn from_node(parent_context: &RenderContext<'g>, node: N) -> Self {
     #[cfg(feature = "css_stylesheet_parsing")]
     let matched_styles = match_stylesheets(&node, &parent_context.stylesheets);
-    let mut preorder_cursor = 0;
-    let mut tree = Self::from_node_impl(
+    let mut tree = Self::from_node_iterative(
       parent_context,
       node,
       #[cfg(feature = "css_stylesheet_parsing")]
       &matched_styles,
-      &mut preorder_cursor,
     );
 
     if tree.is_inline_level() {
@@ -640,137 +638,220 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
     tree
   }
 
-  fn from_node_impl(
+  fn from_node_iterative(
     parent_context: &RenderContext<'g>,
-    mut node: N,
+    root: N,
     #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &[MatchedDeclarations],
-    preorder_cursor: &mut usize,
   ) -> Self {
-    let node_index = *preorder_cursor;
-    *preorder_cursor += 1;
-    let layers = node.take_style_layers();
-    let mut style = build_inherited_style(
-      &parent_context.style,
-      layers,
+    struct PendingRenderNode<'g, N: Node<N>> {
+      context: RenderContext<'g>,
+      node: N,
+      children_is_some: bool,
+      pending_children: IntoIter<N>,
+      rendered_children: Vec<RenderNode<'g, N>>,
+    }
+
+    fn next_preorder_index(preorder_cursor: &mut usize) -> usize {
+      let node_index = *preorder_cursor;
+      *preorder_cursor += 1;
+      node_index
+    }
+
+    fn take_children_vec<N: Node<N>>(node: &mut N) -> (bool, Vec<N>) {
+      let children = node.take_children();
+      let children_is_some = children.is_some();
+      let children = children.map_or_else(Vec::new, <[N]>::into_vec);
+      (children_is_some, children)
+    }
+
+    fn build_render_context<'g>(
+      parent_context: &RenderContext<'g>,
+      style: ResolvedStyle,
+      sizing: Sizing,
+      current_color: Color,
+    ) -> RenderContext<'g> {
+      RenderContext {
+        global: parent_context.global,
+        transform: parent_context.transform,
+        style: Box::new(style),
+        current_color,
+        draw_debug_border: parent_context.draw_debug_border,
+        fetched_resources: parent_context.fetched_resources.clone(),
+        sizing,
+        #[cfg(feature = "css_stylesheet_parsing")]
+        stylesheets: parent_context.stylesheets.clone(),
+      }
+    }
+
+    fn resolve_computed_style<'g, N: Node<N>>(
+      parent_context: &RenderContext<'g>,
+      node: &mut N,
+      node_index: usize,
+      #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &[MatchedDeclarations],
+    ) -> (ResolvedStyle, Sizing, Color) {
+      let layers = node.take_style_layers();
+      let mut style = build_inherited_style(
+        &parent_context.style,
+        layers,
+        #[cfg(feature = "css_stylesheet_parsing")]
+        matched_declarations
+          .get(node_index)
+          .unwrap_or(&MatchedDeclarations::default()),
+        parent_context.sizing.viewport,
+      );
+
+      let font_size = style
+        .font_size
+        .map(|font_size| font_size.to_px(&parent_context.sizing, parent_context.sizing.font_size))
+        .unwrap_or(parent_context.sizing.font_size);
+      let sizing = Sizing {
+        font_size,
+        ..parent_context.sizing.clone()
+      };
+      let current_color = style.color.resolve(parent_context.current_color);
+      style.make_computed(&sizing);
+      (style, sizing, current_color)
+    }
+
+    fn build_pending_node<'g, N: Node<N>>(
+      parent_context: &RenderContext<'g>,
+      mut node: N,
+      #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &[MatchedDeclarations],
+      preorder_cursor: &mut usize,
+    ) -> PendingRenderNode<'g, N> {
+      let node_index = next_preorder_index(preorder_cursor);
+      let (style, sizing, current_color) = resolve_computed_style(
+        parent_context,
+        &mut node,
+        node_index,
+        #[cfg(feature = "css_stylesheet_parsing")]
+        matched_declarations,
+      );
+      let (children_is_some, children) = take_children_vec(&mut node);
+      let context = build_render_context(parent_context, style, sizing, current_color);
+
+      PendingRenderNode {
+        context,
+        node,
+        children_is_some,
+        rendered_children: Vec::with_capacity(children.len()),
+        pending_children: children.into_iter(),
+      }
+    }
+
+    let mut preorder_cursor = 0;
+    let mut stack = vec![build_pending_node(
+      parent_context,
+      root,
       #[cfg(feature = "css_stylesheet_parsing")]
-      matched_declarations
-        .get(node_index)
-        .unwrap_or(&MatchedDeclarations::default()),
-      parent_context.sizing.viewport,
-    );
+      matched_declarations,
+      &mut preorder_cursor,
+    )];
 
-    let font_size = style
-      .font_size
-      .map(|font_size| font_size.to_px(&parent_context.sizing, parent_context.sizing.font_size))
-      .unwrap_or(parent_context.sizing.font_size);
+    loop {
+      let Some(current) = stack.last_mut() else {
+        unreachable!();
+      };
 
-    let current_color = style.color.resolve(parent_context.current_color);
-
-    let sizing = Sizing {
-      font_size,
-      ..parent_context.sizing.clone()
-    };
-
-    style.make_computed(&sizing);
-
-    let mut render_context = RenderContext {
-      global: parent_context.global,
-      transform: parent_context.transform,
-      style: Box::new(style),
-      current_color,
-      draw_debug_border: parent_context.draw_debug_border,
-      fetched_resources: parent_context.fetched_resources.clone(),
-      sizing,
-      #[cfg(feature = "css_stylesheet_parsing")]
-      stylesheets: parent_context.stylesheets.clone(),
-    };
-
-    let children = node.take_children().map(|children| {
-      let mut rendered_children = Vec::with_capacity(children.len());
-
-      for child in children.into_vec() {
-        rendered_children.push(Self::from_node_impl(
-          &render_context,
+      if let Some(child) = current.pending_children.next() {
+        let child_pending = build_pending_node(
+          &current.context,
           child,
           #[cfg(feature = "css_stylesheet_parsing")]
           matched_declarations,
-          preorder_cursor,
-        ));
-      }
-
-      rendered_children.into_boxed_slice()
-    });
-
-    let Some(mut children) = children else {
-      return Self {
-        context: render_context,
-        node: Some(node),
-        children: None,
-      };
-    };
-
-    if render_context.style.display.should_blockify_children() {
-      for child in &mut children {
-        child.context.style.display.blockify();
-      }
-
-      return Self {
-        context: render_context,
-        node: Some(node),
-        children: Some(children),
-      };
-    }
-
-    let has_inline = children.iter().any(RenderNode::is_inline_level);
-    let has_block = children.iter().any(|child| !child.is_inline_level());
-    let needs_anonymous_boxes =
-      !render_context.style.display.is_inline() && has_inline && has_block;
-
-    if !needs_anonymous_boxes {
-      return Self {
-        context: render_context,
-        node: Some(node),
-        children: Some(children),
-      };
-    }
-
-    render_context.style.display = render_context.style.display.as_blockified();
-
-    let mut final_children = Vec::new();
-    let mut inline_group = Vec::new();
-
-    let anonymous_box_style = ResolvedStyle {
-      display: Display::Block,
-      ..ResolvedStyle::default()
-    };
-
-    for item in children {
-      if item.is_inline_level() {
-        inline_group.push(item);
+          &mut preorder_cursor,
+        );
+        stack.push(child_pending);
         continue;
       }
 
-      flush_inline_group(
-        &mut inline_group,
-        &mut final_children,
-        &anonymous_box_style,
-        &render_context,
-      );
+      let Some(mut finished) = stack.pop() else {
+        unreachable!();
+      };
 
-      final_children.push(item);
-    }
+      let children = if finished.children_is_some {
+        Some(finished.rendered_children.into_boxed_slice())
+      } else {
+        None
+      };
 
-    flush_inline_group(
-      &mut inline_group,
-      &mut final_children,
-      &anonymous_box_style,
-      &render_context,
-    );
+      let render_node = if let Some(mut children) = children {
+        if finished.context.style.display.should_blockify_children() {
+          for child in &mut children {
+            child.context.style.display.blockify();
+          }
 
-    Self {
-      context: render_context,
-      node: Some(node),
-      children: Some(final_children.into_boxed_slice()),
+          RenderNode {
+            context: finished.context,
+            node: Some(finished.node),
+            children: Some(children),
+          }
+        } else {
+          let has_inline = children.iter().any(RenderNode::is_inline_level);
+          let has_block = children.iter().any(|child| !child.is_inline_level());
+          let needs_anonymous_boxes =
+            !finished.context.style.display.is_inline() && has_inline && has_block;
+
+          if !needs_anonymous_boxes {
+            RenderNode {
+              context: finished.context,
+              node: Some(finished.node),
+              children: Some(children),
+            }
+          } else {
+            finished.context.style.display = finished.context.style.display.as_blockified();
+
+            let mut final_children = Vec::new();
+            let mut inline_group = Vec::new();
+
+            let anonymous_box_style = ResolvedStyle {
+              display: Display::Block,
+              ..ResolvedStyle::default()
+            };
+
+            for item in children {
+              if item.is_inline_level() {
+                inline_group.push(item);
+                continue;
+              }
+
+              flush_inline_group(
+                &mut inline_group,
+                &mut final_children,
+                &anonymous_box_style,
+                &finished.context,
+              );
+
+              final_children.push(item);
+            }
+
+            flush_inline_group(
+              &mut inline_group,
+              &mut final_children,
+              &anonymous_box_style,
+              &finished.context,
+            );
+
+            RenderNode {
+              context: finished.context,
+              node: Some(finished.node),
+              children: Some(final_children.into_boxed_slice()),
+            }
+          }
+        }
+      } else {
+        RenderNode {
+          context: finished.context,
+          node: Some(finished.node),
+          children: None,
+        }
+      };
+
+      if let Some(parent) = stack.last_mut() {
+        parent.rendered_children.push(render_node);
+      } else {
+        return render_node;
+      }
     }
   }
 
