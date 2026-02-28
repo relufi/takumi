@@ -89,6 +89,8 @@ pub struct CalcFormula {
   em: f32,
   vh: f32,
   vw: f32,
+  vmin: f32,
+  vmax: f32,
   cm: f32,
   mm: f32,
   inch: f32,
@@ -136,6 +138,20 @@ impl CalcFormula {
   fn vw(value: f32) -> Self {
     Self {
       vw: value,
+      ..Default::default()
+    }
+  }
+
+  fn vmin(value: f32) -> Self {
+    Self {
+      vmin: value,
+      ..Default::default()
+    }
+  }
+
+  fn vmax(value: f32) -> Self {
+    Self {
+      vmax: value,
       ..Default::default()
     }
   }
@@ -190,6 +206,8 @@ impl CalcFormula {
       em: -self.em,
       vh: -self.vh,
       vw: -self.vw,
+      vmin: -self.vmin,
+      vmax: -self.vmax,
       cm: -self.cm,
       mm: -self.mm,
       inch: -self.inch,
@@ -207,6 +225,8 @@ impl CalcFormula {
       em: self.em + rhs.em,
       vh: self.vh + rhs.vh,
       vw: self.vw + rhs.vw,
+      vmin: self.vmin + rhs.vmin,
+      vmax: self.vmax + rhs.vmax,
       cm: self.cm + rhs.cm,
       mm: self.mm + rhs.mm,
       inch: self.inch + rhs.inch,
@@ -224,6 +244,8 @@ impl CalcFormula {
       em: self.em - rhs.em,
       vh: self.vh - rhs.vh,
       vw: self.vw - rhs.vw,
+      vmin: self.vmin - rhs.vmin,
+      vmax: self.vmax - rhs.vmax,
       cm: self.cm - rhs.cm,
       mm: self.mm - rhs.mm,
       inch: self.inch - rhs.inch,
@@ -241,6 +263,8 @@ impl CalcFormula {
       em: self.em * factor,
       vh: self.vh * factor,
       vw: self.vw * factor,
+      vmin: self.vmin * factor,
+      vmax: self.vmax * factor,
       cm: self.cm * factor,
       mm: self.mm * factor,
       inch: self.inch * factor,
@@ -251,12 +275,19 @@ impl CalcFormula {
   }
 
   fn resolve(self, sizing: &Sizing) -> CalcLinear {
+    let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
+    let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
+    let viewport_min = viewport_width.min(viewport_height);
+    let viewport_max = viewport_width.max(viewport_height);
+
     CalcLinear {
       px: self.px * sizing.viewport.device_pixel_ratio
         + self.rem * sizing.viewport.font_size * sizing.viewport.device_pixel_ratio
         + self.em * sizing.font_size
-        + self.vh * sizing.viewport.height.unwrap_or_default() as f32 / 100.0
-        + self.vw * sizing.viewport.width.unwrap_or_default() as f32 / 100.0
+        + self.vh * viewport_height / 100.0
+        + self.vw * viewport_width / 100.0
+        + self.vmin * viewport_min / 100.0
+        + self.vmax * viewport_max / 100.0
         + self.cm * ONE_CM_IN_PX * sizing.viewport.device_pixel_ratio
         + self.mm * ONE_MM_IN_PX * sizing.viewport.device_pixel_ratio
         + self.inch * ONE_IN_PX * sizing.viewport.device_pixel_ratio
@@ -408,7 +439,23 @@ fn parse_calc_factor<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, CalcValu
         "em" => Ok(CalcValue::Formula(CalcFormula::em(*value))),
         "rem" => Ok(CalcValue::Formula(CalcFormula::rem(*value))),
         "vw" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "dvw" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "svw" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "lvw" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "cqw" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "cqi" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
+        "vi" => Ok(CalcValue::Formula(CalcFormula::vw(*value))),
         "vh" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "dvh" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "svh" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "lvh" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "cqh" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "cqb" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "vb" => Ok(CalcValue::Formula(CalcFormula::vh(*value))),
+        "vmin" => Ok(CalcValue::Formula(CalcFormula::vmin(*value))),
+        "cqmin" => Ok(CalcValue::Formula(CalcFormula::vmin(*value))),
+        "vmax" => Ok(CalcValue::Formula(CalcFormula::vmax(*value))),
+        "cqmax" => Ok(CalcValue::Formula(CalcFormula::vmax(*value))),
         "cm" => Ok(CalcValue::Formula(CalcFormula::cm(*value))),
         "mm" => Ok(CalcValue::Formula(CalcFormula::mm(*value))),
         "in" => Ok(CalcValue::Formula(CalcFormula::inch(*value))),
@@ -446,6 +493,10 @@ pub enum Length<const DEFAULT_AUTO: bool = true> {
   Vh(f32),
   /// Vw value relative to the viewport width (0-100)
   Vw(f32),
+  /// Vmin value relative to the smaller viewport dimension (0-100)
+  VMin(f32),
+  /// Vmax value relative to the larger viewport dimension (0-100)
+  VMax(f32),
   /// Centimeter value
   Cm(f32),
   /// Millimeter value
@@ -489,7 +540,21 @@ impl<const DEFAULT_AUTO: bool> TailwindPropertyParser for Length<DEFAULT_AUTO> {
     match_ignore_ascii_case! {token,
       "auto" => Some(Length::Auto),
       "dvw" => Some(Length::Vw(100.0)),
+      "svw" => Some(Length::Vw(100.0)),
+      "lvw" => Some(Length::Vw(100.0)),
+      "cqw" => Some(Length::Vw(100.0)),
+      "cqi" => Some(Length::Vw(100.0)),
+      "vi" => Some(Length::Vw(100.0)),
       "dvh" => Some(Length::Vh(100.0)),
+      "svh" => Some(Length::Vh(100.0)),
+      "lvh" => Some(Length::Vh(100.0)),
+      "cqh" => Some(Length::Vh(100.0)),
+      "cqb" => Some(Length::Vh(100.0)),
+      "vb" => Some(Length::Vh(100.0)),
+      "vmin" => Some(Length::VMin(100.0)),
+      "cqmin" => Some(Length::VMin(100.0)),
+      "vmax" => Some(Length::VMax(100.0)),
+      "cqmax" => Some(Length::VMax(100.0)),
       "px" => Some(Length::Px(1.0)),
       "full" => Some(Length::Percentage(100.0)),
       "3xs" => Some(Length::Rem(16.0)),
@@ -533,6 +598,8 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
       Length::Em(v) => Length::Em(-v),
       Length::Vh(v) => Length::Vh(-v),
       Length::Vw(v) => Length::Vw(-v),
+      Length::VMin(v) => Length::VMin(-v),
+      Length::VMax(v) => Length::VMax(-v),
       Length::Cm(v) => Length::Cm(-v),
       Length::Mm(v) => Length::Mm(-v),
       Length::In(v) => Length::In(-v),
@@ -576,7 +643,23 @@ impl<'i, const DEFAULT_AUTO: bool> FromCss<'i> for Length<DEFAULT_AUTO> {
           "em" => Ok(Self::Em(*value)),
           "rem" => Ok(Self::Rem(*value)),
           "vw" => Ok(Self::Vw(*value)),
+          "dvw" => Ok(Self::Vw(*value)),
+          "svw" => Ok(Self::Vw(*value)),
+          "lvw" => Ok(Self::Vw(*value)),
+          "cqw" => Ok(Self::Vw(*value)),
+          "cqi" => Ok(Self::Vw(*value)),
+          "vi" => Ok(Self::Vw(*value)),
           "vh" => Ok(Self::Vh(*value)),
+          "dvh" => Ok(Self::Vh(*value)),
+          "svh" => Ok(Self::Vh(*value)),
+          "lvh" => Ok(Self::Vh(*value)),
+          "cqh" => Ok(Self::Vh(*value)),
+          "cqb" => Ok(Self::Vh(*value)),
+          "vb" => Ok(Self::Vh(*value)),
+          "vmin" => Ok(Self::VMin(*value)),
+          "cqmin" => Ok(Self::VMin(*value)),
+          "vmax" => Ok(Self::VMax(*value)),
+          "cqmax" => Ok(Self::VMax(*value)),
           "cm" => Ok(Self::Cm(*value)),
           "mm" => Ok(Self::Mm(*value)),
           "in" => Ok(Self::In(*value)),
@@ -607,6 +690,16 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
       Length::Em(value) => value * sizing.font_size,
       Length::Vh(value) => value * sizing.viewport.height.unwrap_or_default() as f32 / 100.0,
       Length::Vw(value) => value * sizing.viewport.width.unwrap_or_default() as f32 / 100.0,
+      Length::VMin(value) => {
+        let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
+        let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
+        value * viewport_width.min(viewport_height) / 100.0
+      }
+      Length::VMax(value) => {
+        let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
+        let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
+        value * viewport_width.max(viewport_height) / 100.0
+      }
       Length::Cm(value) => value * ONE_CM_IN_PX,
       Length::Mm(value) => value * ONE_MM_IN_PX,
       Length::In(value) => value * ONE_IN_PX,
@@ -631,6 +724,16 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
       }
       Length::Vw(value) => {
         CompactLength::length(sizing.viewport.width.unwrap_or_default() as f32 * value / 100.0)
+      }
+      Length::VMin(value) => {
+        let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
+        let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
+        CompactLength::length(viewport_width.min(viewport_height) * value / 100.0)
+      }
+      Length::VMax(value) => {
+        let viewport_width = sizing.viewport.width.unwrap_or_default() as f32;
+        let viewport_height = sizing.viewport.height.unwrap_or_default() as f32;
+        CompactLength::length(viewport_width.max(viewport_height) * value / 100.0)
       }
       Length::Calc(handle) => {
         let linear = handle.resolve_linear(sizing);
@@ -670,6 +773,8 @@ impl<const DEFAULT_AUTO: bool> Length<DEFAULT_AUTO> {
         | Length::Percentage(_)
         | Length::Vh(_)
         | Length::Vw(_)
+        | Length::VMin(_)
+        | Length::VMax(_)
         | Length::Em(_)
         | Length::Calc(_)
     ) {
@@ -878,5 +983,46 @@ mod tests {
     value.make_computed(&sizing);
     assert_eq!(value, Length::Px(7.5));
     assert_eq!(value.to_px(&sizing, 0.0), 15.0);
+  }
+
+  #[test]
+  fn parse_supports_modern_viewport_and_container_units() {
+    assert_eq!(Length::<true>::from_str("12dvw"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12svw"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12lvw"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqw"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqi"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12vi"), Ok(Length::Vw(12.0)));
+    assert_eq!(Length::<true>::from_str("12dvh"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12svh"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12lvh"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqh"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqb"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12vb"), Ok(Length::Vh(12.0)));
+    assert_eq!(Length::<true>::from_str("12vmin"), Ok(Length::VMin(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqmin"), Ok(Length::VMin(12.0)));
+    assert_eq!(Length::<true>::from_str("12vmax"), Ok(Length::VMax(12.0)));
+    assert_eq!(Length::<true>::from_str("12cqmax"), Ok(Length::VMax(12.0)));
+  }
+
+  #[test]
+  fn parse_calc_supports_modern_viewport_and_container_units() {
+    let parsed = Length::<true>::from_str("calc(20cqmax + 5px - 2cqb)");
+    assert_eq!(
+      parsed,
+      Ok(Length::Calc(CalcHandle::Formula(CalcFormula {
+        vmax: 20.0,
+        vh: -2.0,
+        px: 5.0,
+        ..Default::default()
+      })))
+    );
+  }
+
+  #[test]
+  fn vmin_and_vmax_resolve_to_expected_pixels() {
+    let sizing = sizing();
+    assert_near(Length::<true>::VMin(50.0).to_px(&sizing, 0.0), 50.0);
+    assert_near(Length::<true>::VMax(50.0).to_px(&sizing, 0.0), 100.0);
   }
 }
