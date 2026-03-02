@@ -1,8 +1,8 @@
+use std::sync::Mutex;
 use std::{collections::HashMap, sync::Arc};
 
 use napi::bindgen_prelude::*;
 use takumi::{
-  GlobalContext,
   layout::{DEFAULT_DEVICE_PIXEL_RATIO, DEFAULT_FONT_SIZE, Viewport, node::NodeKind},
   rendering::{RenderOptionsBuilder, measure_layout},
   resources::image::load_image_source_from_bytes,
@@ -10,27 +10,27 @@ use takumi::{
 
 use crate::{
   buffer_from_object, map_error,
-  renderer::{MeasuredNode, RenderOptions},
+  renderer::{MeasuredNode, RenderOptions, RendererState},
 };
 
-pub struct MeasureTask<'g> {
+pub struct MeasureTask {
   pub node: Option<NodeKind>,
-  pub global: &'g GlobalContext,
+  pub(crate) state: Arc<Mutex<RendererState>>,
   pub viewport: Viewport,
   pub stylesheets: Option<Vec<String>>,
   pub fetched_resources: HashMap<Arc<str>, Buffer>,
 }
 
-impl<'g> MeasureTask<'g> {
-  pub fn from_options(
+impl MeasureTask {
+  pub(crate) fn from_options(
     env: Env,
     node: NodeKind,
     options: RenderOptions,
-    global: &'g GlobalContext,
+    state: Arc<Mutex<RendererState>>,
   ) -> Result<Self> {
     Ok(MeasureTask {
       node: Some(node),
-      global,
+      state,
       viewport: Viewport {
         width: options.width,
         height: options.height,
@@ -51,7 +51,7 @@ impl<'g> MeasureTask<'g> {
   }
 }
 
-impl Task for MeasureTask<'_> {
+impl Task for MeasureTask {
   type Output = takumi::rendering::MeasuredNode;
   type JsValue = MeasuredNode;
 
@@ -71,12 +71,17 @@ impl Task for MeasureTask<'_> {
       })
       .collect::<Result<HashMap<_, _>, _>>()?;
 
+    let state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
+
     let options = RenderOptionsBuilder::default()
       .viewport(self.viewport)
       .fetched_resources(initialized_images)
       .stylesheets(self.stylesheets.clone().unwrap_or_default())
       .node(node)
-      .global(self.global)
+      .global(&state.global)
       .build()
       .map_err(map_error)?;
 

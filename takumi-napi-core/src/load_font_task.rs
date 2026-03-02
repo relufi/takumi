@@ -1,19 +1,17 @@
 use std::borrow::Cow;
+use std::sync::{Arc, Mutex};
 
 use napi::bindgen_prelude::*;
-use takumi::{
-  GlobalContext,
-  parley::{FontWeight, fontique::FontInfoOverride},
-};
+use takumi::parley::{FontWeight, fontique::FontInfoOverride};
 
-use crate::FontInput;
+use crate::{FontInput, renderer::RendererState};
 
-pub struct LoadFontTask<'g> {
-  pub context: &'g mut GlobalContext,
+pub struct LoadFontTask {
+  pub(crate) state: Arc<Mutex<RendererState>>,
   pub(crate) buffers: Vec<(FontInput, Buffer)>,
 }
 
-impl Task for LoadFontTask<'_> {
+impl Task for LoadFontTask {
   type Output = usize;
   type JsValue = u32;
 
@@ -23,10 +21,14 @@ impl Task for LoadFontTask<'_> {
     }
 
     let mut loaded_count = 0;
+    let mut state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
 
     for (font, buffer) in &self.buffers {
-      if self
-        .context
+      if state
+        .global
         .font_context
         .load_and_store(
           Cow::Borrowed(buffer),

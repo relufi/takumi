@@ -1,8 +1,8 @@
+use std::sync::Mutex;
 use std::{collections::HashMap, sync::Arc};
 
 use napi::bindgen_prelude::*;
 use takumi::{
-  GlobalContext,
   layout::{DEFAULT_DEVICE_PIXEL_RATIO, DEFAULT_FONT_SIZE, Viewport, node::NodeKind},
   rendering::{RenderOptionsBuilder, render, write_image},
   resources::image::load_image_source_from_bytes,
@@ -10,13 +10,13 @@ use takumi::{
 
 use crate::{
   ExternalMemoryAccountable, buffer_from_object, map_error,
-  renderer::{OutputFormat, RenderOptions},
+  renderer::{OutputFormat, RenderOptions, RendererState},
 };
 
-pub struct RenderTask<'g> {
+pub struct RenderTask {
   pub draw_debug_border: bool,
   pub node: Option<NodeKind>,
-  pub global: &'g GlobalContext,
+  pub(crate) state: Arc<Mutex<RendererState>>,
   pub viewport: Viewport,
   pub format: OutputFormat,
   pub quality: Option<u8>,
@@ -24,16 +24,16 @@ pub struct RenderTask<'g> {
   pub fetched_resources: HashMap<Arc<str>, Buffer>,
 }
 
-impl<'g> RenderTask<'g> {
-  pub fn from_options(
+impl RenderTask {
+  pub(crate) fn from_options(
     env: Env,
     node: NodeKind,
     options: RenderOptions,
-    global: &'g GlobalContext,
+    state: Arc<Mutex<RendererState>>,
   ) -> Result<Self> {
     Ok(RenderTask {
       node: Some(node),
-      global,
+      state,
       viewport: Viewport {
         width: options.width,
         height: options.height,
@@ -57,7 +57,7 @@ impl<'g> RenderTask<'g> {
   }
 }
 
-impl Task for RenderTask<'_> {
+impl Task for RenderTask {
   type Output = Vec<u8>;
   type JsValue = Buffer;
 
@@ -77,13 +77,18 @@ impl Task for RenderTask<'_> {
       })
       .collect::<Result<HashMap<_, _>, _>>()?;
 
+    let state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
+
     let image = render(
       RenderOptionsBuilder::default()
         .viewport(self.viewport)
         .fetched_resources(initialized_images)
         .stylesheets(self.stylesheets.take().unwrap_or_default())
         .node(node)
-        .global(self.global)
+        .global(&state.global)
         .draw_debug_border(self.draw_debug_border)
         .build()
         .map_err(map_error)?,

@@ -1,19 +1,21 @@
-use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use napi::bindgen_prelude::*;
-use takumi::resources::image::{PersistentImageStore, load_image_source_from_bytes};
-use xxhash_rust::xxh3::{Xxh3DefaultBuilder, xxh3_64};
+use takumi::resources::image::load_image_source_from_bytes;
+use xxhash_rust::xxh3::xxh3_64;
 
-use crate::{map_error, renderer::ImageCacheKey};
+use crate::{
+  map_error,
+  renderer::{ImageCacheKey, RendererState},
+};
 
-pub struct PutPersistentImageTask<'s> {
+pub struct PutPersistentImageTask {
   pub src: Option<String>,
-  pub store: &'s PersistentImageStore,
+  pub(crate) state: Arc<Mutex<RendererState>>,
   pub buffer: Buffer,
-  pub(crate) persistent_image_cache: &'s mut HashSet<ImageCacheKey, Xxh3DefaultBuilder>,
 }
 
-impl Task for PutPersistentImageTask<'_> {
+impl Task for PutPersistentImageTask {
   type Output = ();
   type JsValue = ();
 
@@ -27,14 +29,16 @@ impl Task for PutPersistentImageTask<'_> {
       data_hash: xxh3_64(&self.buffer),
     };
 
-    if self.persistent_image_cache.contains(&cache_key) {
+    let mut state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
+    if state.persistent_image_cache.contains(&cache_key) {
       return Ok(());
     }
-
-    self.persistent_image_cache.insert(cache_key);
-
+    state.persistent_image_cache.insert(cache_key);
     let image = load_image_source_from_bytes(&self.buffer).map_err(map_error)?;
-    self.store.insert(src, image);
+    state.global.persistent_image_store.insert(src, image);
 
     Ok(())
   }

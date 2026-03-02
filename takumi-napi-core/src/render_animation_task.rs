@@ -1,24 +1,27 @@
+use std::sync::{Arc, Mutex};
+
 use napi::bindgen_prelude::*;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use takumi::{
-  GlobalContext,
   layout::{Viewport, node::NodeKind},
   rendering::{
     AnimationFrame, RenderOptionsBuilder, encode_animated_png, encode_animated_webp, render,
   },
 };
 
-use crate::{ExternalMemoryAccountable, map_error, renderer::AnimationOutputFormat};
+use crate::{
+  ExternalMemoryAccountable, map_error,
+  renderer::{AnimationOutputFormat, RendererState},
+};
 
-pub struct RenderAnimationTask<'g> {
+pub struct RenderAnimationTask {
   pub nodes: Option<Vec<(NodeKind, u32)>>,
-  pub context: &'g GlobalContext,
+  pub(crate) state: Arc<Mutex<RendererState>>,
   pub viewport: Viewport,
   pub format: AnimationOutputFormat,
   pub draw_debug_border: bool,
 }
 
-impl Task for RenderAnimationTask<'_> {
+impl Task for RenderAnimationTask {
   type Output = Vec<u8>;
   type JsValue = Buffer;
 
@@ -26,16 +29,20 @@ impl Task for RenderAnimationTask<'_> {
     let Some(nodes) = self.nodes.take() else {
       unreachable!()
     };
+    let state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
 
     let frames = nodes
-      .into_par_iter()
+      .into_iter()
       .map(|(node, duration_ms)| {
         Ok(AnimationFrame::new(
           render(
             RenderOptionsBuilder::default()
               .viewport(self.viewport)
               .node(node)
-              .global(self.context)
+              .global(&state.global)
               .draw_debug_border(self.draw_debug_border)
               .build()
               .map_err(map_error)?,

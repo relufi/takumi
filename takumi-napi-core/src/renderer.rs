@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::{
+  borrow::Cow,
+  collections::HashSet,
+  sync::{Arc, Mutex},
+};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -82,6 +86,10 @@ pub(crate) struct ImageCacheKey {
 /// The main renderer for Takumi image rendering engine (Node.js version).
 #[napi]
 pub struct Renderer {
+  pub(crate) state: Arc<Mutex<RendererState>>,
+}
+
+pub(crate) struct RendererState {
   pub(crate) global: GlobalContext,
   pub(crate) persistent_image_cache: HashSet<ImageCacheKey, Xxh3DefaultBuilder>,
 }
@@ -243,8 +251,10 @@ impl Renderer {
     }
 
     let mut renderer = Self {
-      global,
-      persistent_image_cache: HashSet::default(),
+      state: Arc::new(Mutex::new(RendererState {
+        global,
+        persistent_image_cache: HashSet::default(),
+      })),
     };
 
     if let Some(fonts) = options.fonts {
@@ -254,11 +264,15 @@ impl Renderer {
     }
 
     if let Some(images) = options.persistent_images {
+      let state = renderer
+        .state
+        .lock()
+        .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
       for image in images {
         let buffer = buffer_slice_from_object(env, image.data)?;
         let image_source = load_image_source_from_bytes(&buffer).map_err(map_error)?;
 
-        renderer
+        state
           .global
           .persistent_image_store
           .insert(image.src, image_source);
@@ -287,7 +301,7 @@ impl Renderer {
     src: String,
     data: Object,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<PutPersistentImageTask<'_>>> {
+  ) -> Result<AsyncTask<PutPersistentImageTask>> {
     self.put_persistent_image(env, src, data, signal)
   }
 
@@ -302,15 +316,14 @@ impl Renderer {
     src: String,
     data: Object,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<PutPersistentImageTask<'_>>> {
+  ) -> Result<AsyncTask<PutPersistentImageTask>> {
     let buffer = buffer_from_object(env, data)?;
 
     Ok(AsyncTask::with_optional_signal(
       PutPersistentImageTask {
         src: Some(src),
-        store: &self.global.persistent_image_store,
+        state: Arc::clone(&self.state),
         buffer,
-        persistent_image_cache: &mut self.persistent_image_cache,
       },
       signal,
     ))
@@ -319,8 +332,12 @@ impl Renderer {
   /// Loads a font synchronously.
   #[napi(ts_args_type = "font: Font")]
   pub fn load_font_sync(&mut self, env: Env, font: Object) -> Result<()> {
+    let mut state = self
+      .state
+      .lock()
+      .map_err(|e| Error::from_reason(format!("Renderer lock poisoned: {e}")))?;
     if let Ok(buffer) = buffer_slice_from_object(env, font) {
-      self
+      state
         .global
         .font_context
         .load_and_store(Cow::Borrowed(&buffer), None, None)
@@ -342,7 +359,7 @@ impl Renderer {
       width: None,
     };
 
-    self
+    state
       .global
       .font_context
       .load_and_store(Cow::Borrowed(&buffer), Some(font_override), None)
@@ -361,7 +378,7 @@ impl Renderer {
     env: Env,
     data: Object,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<LoadFontTask<'_>>> {
+  ) -> Result<AsyncTask<LoadFontTask>> {
     self.load_fonts(env, vec![data], signal)
   }
 
@@ -375,7 +392,7 @@ impl Renderer {
     env: Env,
     data: Object,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<LoadFontTask<'_>>> {
+  ) -> Result<AsyncTask<LoadFontTask>> {
     self.load_fonts(env, vec![data], signal)
   }
 
@@ -389,7 +406,7 @@ impl Renderer {
     env: Env,
     fonts: Vec<Object>,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<LoadFontTask<'_>>> {
+  ) -> Result<AsyncTask<LoadFontTask>> {
     self.load_fonts(env, fonts, signal)
   }
 
@@ -403,7 +420,7 @@ impl Renderer {
     env: Env,
     fonts: Vec<Object>,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<LoadFontTask<'_>>> {
+  ) -> Result<AsyncTask<LoadFontTask>> {
     let buffers = fonts
       .into_iter()
       .map(|font| {
@@ -422,7 +439,7 @@ impl Renderer {
 
     Ok(AsyncTask::with_optional_signal(
       LoadFontTask {
-        context: &mut self.global,
+        state: Arc::clone(&self.state),
         buffers,
       },
       signal,
@@ -432,7 +449,9 @@ impl Renderer {
   /// Clears the renderer's internal image store.
   #[napi]
   pub fn clear_image_store(&self) {
-    self.global.persistent_image_store.clear();
+    if let Ok(state) = self.state.lock() {
+      state.global.persistent_image_store.clear();
+    }
   }
 
   /// Renders a node tree into an image buffer asynchronously.
@@ -446,11 +465,16 @@ impl Renderer {
     source: Object,
     options: Option<RenderOptions>,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<RenderTask<'_>>> {
+  ) -> Result<AsyncTask<RenderTask>> {
     let node: NodeKind = deserialize_with_tracing(source)?;
 
     Ok(AsyncTask::with_optional_signal(
-      RenderTask::from_options(env, node, options.unwrap_or_default(), &self.global)?,
+      RenderTask::from_options(
+        env,
+        node,
+        options.unwrap_or_default(),
+        Arc::clone(&self.state),
+      )?,
       signal,
     ))
   }
@@ -466,7 +490,7 @@ impl Renderer {
     source: Object,
     options: Option<RenderOptions>,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<RenderTask<'_>>> {
+  ) -> Result<AsyncTask<RenderTask>> {
     self.render(env, source, options, signal)
   }
 
@@ -481,11 +505,16 @@ impl Renderer {
     source: Object,
     options: Option<RenderOptions>,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<MeasureTask<'_>>> {
+  ) -> Result<AsyncTask<MeasureTask>> {
     let node: NodeKind = deserialize_with_tracing(source)?;
 
     Ok(AsyncTask::with_optional_signal(
-      MeasureTask::from_options(env, node, options.unwrap_or_default(), &self.global)?,
+      MeasureTask::from_options(
+        env,
+        node,
+        options.unwrap_or_default(),
+        Arc::clone(&self.state),
+      )?,
       signal,
     ))
   }
@@ -500,7 +529,7 @@ impl Renderer {
     source: Vec<AnimationFrameSource>,
     options: RenderAnimationOptions,
     signal: Option<AbortSignal>,
-  ) -> Result<AsyncTask<RenderAnimationTask<'_>>> {
+  ) -> Result<AsyncTask<RenderAnimationTask>> {
     let nodes = source
       .into_iter()
       .map(|frame| Ok((deserialize_with_tracing(frame.node)?, frame.duration_ms)))
@@ -509,7 +538,7 @@ impl Renderer {
     Ok(AsyncTask::with_optional_signal(
       RenderAnimationTask {
         nodes: Some(nodes),
-        context: &self.global,
+        state: Arc::clone(&self.state),
         viewport: (options.width, options.height).into(),
         format: options.format.unwrap_or(AnimationOutputFormat::webp),
         draw_debug_border: options.draw_debug_border.unwrap_or_default(),
