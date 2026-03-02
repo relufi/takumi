@@ -12,6 +12,18 @@ A container node is used to group other nodes and arrange them in a layout.
 
 <TypeTable
   type={{
+    tagName: {
+      type: 'string',
+      description: "Element tag name used for HTML preset and selector matching",
+    },
+    className: {
+      type: 'string',
+      description: 'Element class name used for selector matching',
+    },
+    id: {
+      type: 'string',
+      description: 'Element id used for selector matching',
+    },
     children: {
       type: 'Node[]',
       description: 'Children nodes',
@@ -39,6 +51,18 @@ A text node displays text.
 
 <TypeTable
   type={{
+    tagName: {
+      type: 'string',
+      description: "Element tag name used for HTML preset and selector matching",
+    },
+    className: {
+      type: 'string',
+      description: 'Element class name used for selector matching',
+    },
+    id: {
+      type: 'string',
+      description: 'Element id used for selector matching',
+    },
     text: {
       type: 'string',
       required: true,
@@ -67,6 +91,18 @@ An image node displays rasterized or svg images.
 
 <TypeTable
   type={{
+    tagName: {
+      type: 'string',
+      description: "Element tag name used for HTML preset and selector matching",
+    },
+    className: {
+      type: 'string',
+      description: 'Element class name used for selector matching',
+    },
+    id: {
+      type: 'string',
+      description: 'Element id used for selector matching',
+    },
     src: {
       type: 'string',
       required: true,
