@@ -4,10 +4,17 @@ import { fromJsx } from "@takumi-rs/helpers/jsx";
 import { file, write } from "bun";
 import * as FiveHundredStars from "./components/500-stars";
 import * as OgImage from "./components/og-image";
+import * as PackageOgImage from "./components/package-og-image";
 import * as PrismaOGImage from "./components/prisma-og-image";
 import * as XPostImage from "./components/x-post-image";
 
-const components = [OgImage, FiveHundredStars, XPostImage, PrismaOGImage];
+const components = [
+  OgImage,
+  FiveHundredStars,
+  XPostImage,
+  PrismaOGImage,
+  PackageOgImage,
+];
 
 type Component = (typeof components)[number];
 

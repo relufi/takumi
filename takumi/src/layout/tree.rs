@@ -285,7 +285,7 @@ impl<'r, 'g, N: Node<N>> LayoutTree<'r, 'g, N> {
 }
 
 // Taffy may inject a flex stretch-derived cross-size into leaf `known_dimensions`
-// during intrinsic single-axis sizing (`ComputeSize + InherentSize`). For replaced
+// during intrinsic single-axis sizing (`ComputeSize` with `InherentSize` or `ContentSize`). For replaced
 // elements, letting that value participate in aspect-ratio transfer can
 // incorrectly inflate the measured main-size. Strip that hint at the leaf boundary.
 fn should_strip_flex_intrinsic_stretch_known_dimension<N: Node<N>>(
@@ -293,7 +293,12 @@ fn should_strip_flex_intrinsic_stretch_known_dimension<N: Node<N>>(
   inputs: LayoutInput,
   known_dimensions: Size<Option<f32>>,
 ) -> bool {
-  if inputs.run_mode != RunMode::ComputeSize || inputs.sizing_mode != SizingMode::InherentSize {
+  if inputs.run_mode != RunMode::ComputeSize
+    || !matches!(
+      inputs.sizing_mode,
+      SizingMode::InherentSize | SizingMode::ContentSize
+    )
+  {
     return false;
   }
 
@@ -434,7 +439,6 @@ impl<N: Node<N>> LayoutPartialTree for LayoutTree<'_, '_, N> {
             } else {
               known_dimensions
             };
-
             if let Size {
               width: Some(width),
               height: Some(height),

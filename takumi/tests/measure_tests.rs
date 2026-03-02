@@ -3,7 +3,10 @@ mod test_utils;
 use takumi::{
   layout::{
     node::{ContainerNode, ImageNode, NodeKind, TextNode},
-    style::{Affine, Color, ColorInput, Display, Length::*, Position, Sides, StyleBuilder},
+    style::{
+      Affine, Color, ColorInput, Display, FlexDirection, JustifyContent, Length::*, Position,
+      Sides, StyleBuilder,
+    },
   },
   rendering::{MeasuredNode, MeasuredTextRun, RenderOptionsBuilder, measure_layout},
 };
@@ -294,4 +297,143 @@ fn test_measure_svg_attr_size_in_absolute_flex_container() {
   assert_eq!(svg_child.width, 100.0);
   assert_eq!(svg_child.height, 100.0);
   assert_eq!(svg_child.transform, [1.0, 0.0, 0.0, 1.0, 1060.0, 490.0]);
+}
+
+#[test]
+fn test_measure_svg_attr_size_in_absolute_flex_container_with_parent_padding() {
+  let svg = r##"<svg width="150" height="46" viewBox="0 0 90 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0 0L10 10" fill="#FFFFFF"/></svg>"##;
+
+  let node: NodeKind = ContainerNode {
+    class_name: None,
+    id: None,
+    tag_name: None,
+    preset: None,
+    tw: None,
+    style: Some(
+      StyleBuilder::default()
+        .width(Percentage(100.0))
+        .height(Percentage(100.0))
+        .position(Position::Relative)
+        .display(Display::Flex)
+        .flex_direction(FlexDirection::Column)
+        .justify_content(JustifyContent::Center)
+        .padding(Sides([Px(60.0); 4]))
+        .build()
+        .unwrap(),
+    ),
+    children: Some(
+      [ContainerNode {
+        class_name: None,
+        id: None,
+        tag_name: None,
+        preset: None,
+        tw: None,
+        style: Some(
+          StyleBuilder::default()
+            .position(Position::Absolute)
+            .inset(Sides([Auto, Px(60.0), Px(60.0), Auto]))
+            .display(Display::Flex)
+            .build()
+            .unwrap(),
+        ),
+        children: Some(
+          [ImageNode {
+            class_name: None,
+            id: None,
+            tag_name: Some("svg".into()),
+            preset: None,
+            tw: None,
+            style: None,
+            src: svg.into(),
+            width: Some(150.0),
+            height: Some(46.0),
+          }
+          .into()]
+          .into(),
+        ),
+      }
+      .into()]
+      .into(),
+    ),
+  }
+  .into();
+
+  let result = measure_layout(
+    RenderOptionsBuilder::default()
+      .viewport(create_test_viewport())
+      .node(node)
+      .global(&CONTEXT)
+      .build()
+      .unwrap(),
+  )
+  .unwrap();
+
+  assert_eq!(result.children.len(), 1);
+
+  let absolute_container = &result.children[0];
+  assert_eq!(absolute_container.width, 150.0);
+  assert_eq!(absolute_container.height, 46.0);
+  assert_eq!(
+    absolute_container.transform,
+    [1.0, 0.0, 0.0, 1.0, 990.0, 524.0]
+  );
+  assert_eq!(absolute_container.children.len(), 1);
+
+  let svg_child = &absolute_container.children[0];
+  assert_eq!(svg_child.width, 150.0);
+  assert_eq!(svg_child.height, 46.0);
+  assert_eq!(svg_child.transform, [1.0, 0.0, 0.0, 1.0, 990.0, 524.0]);
+}
+
+#[test]
+fn test_measure_svg_with_width_only_preserves_intrinsic_ratio() {
+  let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><circle cx="64" cy="64" r="64" fill="#ffffff"/></svg>"##;
+
+  let node: NodeKind = ContainerNode {
+    class_name: None,
+    id: None,
+    tag_name: None,
+    preset: None,
+    tw: None,
+    style: Some(
+      StyleBuilder::default()
+        .width(Percentage(100.0))
+        .height(Percentage(100.0))
+        .display(Display::Flex)
+        .flex_direction(FlexDirection::Column)
+        .build()
+        .unwrap(),
+    ),
+    children: Some(
+      [ImageNode {
+        class_name: None,
+        id: None,
+        tag_name: Some("svg".into()),
+        preset: None,
+        tw: None,
+        style: Some(StyleBuilder::default().width(Px(96.0)).build().unwrap()),
+        src: svg.into(),
+        width: None,
+        height: None,
+      }
+      .into()]
+      .into(),
+    ),
+  }
+  .into();
+
+  let result = measure_layout(
+    RenderOptionsBuilder::default()
+      .viewport(create_test_viewport())
+      .node(node)
+      .global(&CONTEXT)
+      .build()
+      .unwrap(),
+  )
+  .unwrap();
+
+  assert_eq!(result.children.len(), 1);
+  let image = &result.children[0];
+  assert_eq!(image.width, 96.0);
+  assert_eq!(image.height, 96.0);
 }

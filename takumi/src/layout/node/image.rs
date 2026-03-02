@@ -104,6 +104,30 @@ impl<Nodes: Node<Nodes>> Node<Nodes> for ImageNode {
         * context.sizing.viewport.device_pixel_ratio,
     };
 
+    let style_known_dimensions = Size {
+      width: if style.size.width.is_auto() {
+        None
+      } else {
+        match available_space.width {
+          AvailableSpace::Definite(width) => Some(width),
+          _ => None,
+        }
+      },
+      height: if style.size.height.is_auto() {
+        None
+      } else {
+        match available_space.height {
+          AvailableSpace::Definite(height) => Some(height),
+          _ => None,
+        }
+      },
+    };
+
+    let known_dimensions = Size {
+      width: known_dimensions.width.or(style_known_dimensions.width),
+      height: known_dimensions.height.or(style_known_dimensions.height),
+    };
+
     let known_dimensions = if should_skip_intrinsic_probe_cross_axis_ratio_transfer(
       self,
       available_space,
