@@ -153,8 +153,7 @@ impl SizedShadow {
                 erase_mask[(my as u32 * erase_placement.width + mx as u32) as usize] as u32;
               if mask_alpha > 0 {
                 let idx = (iy as usize * img_w_usize + ix as usize) * 4;
-                // SAFETY: We verified ix and iy are within bounds.
-                let alpha = unsafe { data.get_unchecked_mut(idx + 3) };
+                let alpha = &mut data[idx + 3];
                 *alpha = ((*alpha as u32 * (255 - mask_alpha)) / 255) as u8;
               }
             }
@@ -264,8 +263,7 @@ pub(crate) fn draw_inset_shadow(
           let mask_alpha = mask[(my as u32 * placement.width + mx as u32) as usize] as u32;
           if mask_alpha > 0 {
             let idx = (iy as usize * img_w_usize + ix as usize) * 4;
-            // SAFETY: ix and iy are verified within valid image dimensions.
-            let alpha = unsafe { data.get_unchecked_mut(idx + 3) };
+            let alpha = &mut data[idx + 3];
             *alpha = ((*alpha as u32 * (255 - mask_alpha)) / 255) as u8;
           }
         }

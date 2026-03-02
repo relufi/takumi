@@ -6,7 +6,7 @@
 use std::{borrow::Cow, mem::replace};
 
 use image::{
-  GenericImage, GenericImageView, ImageError, Rgba, RgbaImage,
+  GenericImageView, ImageError, Rgba, RgbaImage,
   error::{ParameterError, ParameterErrorKind},
 };
 use smallvec::SmallVec;
@@ -663,12 +663,11 @@ fn draw_pixel(
     }
   }
 
-  // SAFETY: draw_pixel is only called from overlay_area which bounds x and y to image dimensions
-  let mut current = unsafe { canvas.unsafe_get_pixel(x, y) };
+  let mut current = *canvas.get_pixel(x, y);
 
   blend_pixel(&mut current, color, mode);
 
-  unsafe { canvas.unsafe_put_pixel(x, y, current) };
+  canvas.put_pixel(x, y, current);
 }
 
 #[inline(always)]
@@ -854,8 +853,7 @@ pub(crate) fn overlay_image<I: GenericImageView<Pixel = Rgba<u8>>>(
 
   if is_identity {
     let get_original_pixel = |x, y| {
-      // SAFETY: x < placement.width and y < placement.height are guaranteed by overlay_area bounds
-      let alpha = unsafe { *mask.get_unchecked(mask_index_from_coord(x, y, placement.width)) };
+      let alpha = mask[mask_index_from_coord(x, y, placement.width)];
 
       if alpha == 0 {
         return Color::transparent().into();
@@ -884,8 +882,7 @@ pub(crate) fn overlay_image<I: GenericImageView<Pixel = Rgba<u8>>>(
     );
   } else if let Some(inverse) = inverse {
     let get_original_pixel = |x, y| {
-      // SAFETY: x < placement.width and y < placement.height are guaranteed by overlay_area bounds
-      let alpha = unsafe { *mask.get_unchecked(mask_index_from_coord(x, y, placement.width)) };
+      let alpha = mask[mask_index_from_coord(x, y, placement.width)];
 
       if alpha == 0 {
         return Color::transparent().into();
