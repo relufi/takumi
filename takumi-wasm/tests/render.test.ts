@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { container, image, text } from "@takumi-rs/helpers";
 import { Glob } from "bun";
-import { Renderer, WasmBuffer } from "../bundlers/node";
+import { Renderer } from "../bundlers/node";
 
 const fontsGlob = new Glob("**/*.{woff2,ttf}");
 
@@ -65,86 +65,79 @@ describe("setup", () => {
 
 describe("render", () => {
   test("webp", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "webp",
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("png", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "png",
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("jpeg 75%", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "jpeg",
       quality: 75,
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("jpeg 100%", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "jpeg",
       quality: 100,
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("auto-calculated dimensions", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       format: "png",
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("with debug borders", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "png",
       drawDebugBorder: true,
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("with device pixel ratio 2.0", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "png",
       devicePixelRatio: 2.0,
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("with fetched resources", () => {
-    using result = renderer.render(node, {
+    const result = renderer.render(node, {
       width: 1200,
       height: 630,
       format: "png",
@@ -156,15 +149,13 @@ describe("render", () => {
       ],
     });
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 
   test("with no options provided", () => {
-    using result = renderer.render(node);
+    const result = renderer.render(node);
 
-    expect(result).toBeInstanceOf(WasmBuffer);
-    expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+    expect(result).toBeInstanceOf(Uint8Array);
   });
 });
 
@@ -258,25 +249,23 @@ describe("renderAsDataUrl", () => {
     };
 
     test("webp", () => {
-      using result = renderer.renderAnimation([frame], {
+      const result = renderer.renderAnimation([frame], {
         width: 1200,
         height: 630,
         format: "webp",
       });
 
-      expect(result).toBeInstanceOf(WasmBuffer);
-      expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+      expect(result).toBeInstanceOf(Uint8Array);
     });
 
     test("apng", () => {
-      using result = renderer.renderAnimation([frame], {
+      const result = renderer.renderAnimation([frame], {
         width: 1200,
         height: 630,
         format: "apng",
       });
 
-      expect(result).toBeInstanceOf(WasmBuffer);
-      expect(result.asUint8Array()).toBeInstanceOf(Uint8Array);
+      expect(result).toBeInstanceOf(Uint8Array);
     });
   });
 });

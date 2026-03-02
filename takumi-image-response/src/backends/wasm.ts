@@ -133,11 +133,8 @@ function createStream(component: ReactNode, options: ImageResponseOptions) {
         }
 
         const image = rendererInstance.render(node, options);
-        const bytes = image.asUint8Array().slice(); // mandatory to avoid use-after-free
 
-        image.free();
-
-        controller.enqueue(bytes);
+        controller.enqueue(image as Uint8Array<ArrayBuffer>);
         controller.close();
       } catch (error) {
         controller.error(error);

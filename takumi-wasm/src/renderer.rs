@@ -10,7 +10,6 @@ use crate::{
   },
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
-use js_sys::Uint8Array;
 use serde_wasm_bindgen::{from_value, to_value};
 use std::collections::HashSet;
 use takumi::{
@@ -25,37 +24,6 @@ use takumi::{
 };
 use wasm_bindgen::prelude::*;
 use xxhash_rust::xxh3::{Xxh3DefaultBuilder, xxh3_64};
-
-/// A zero-copy WASM buffer view holder.
-#[wasm_bindgen]
-pub struct WasmBuffer {
-  data: Box<[u8]>,
-}
-
-impl WasmBuffer {
-  fn from_vec(data: Vec<u8>) -> Self {
-    Self {
-      data: data.into_boxed_slice(),
-    }
-  }
-}
-
-#[wasm_bindgen]
-impl WasmBuffer {
-  /// Returns the buffer byte length.
-  #[wasm_bindgen(getter = byteLength)]
-  pub fn byte_length(&self) -> usize {
-    self.data.len()
-  }
-
-  /// Returns a Uint8Array view over WASM memory without cloning.
-  #[wasm_bindgen(js_name = asUint8Array)]
-  pub fn as_uint8_array(&self) -> Uint8Array {
-    // SAFETY: `self.data` is owned by this object, so the view remains valid
-    // for the lifetime of this `WasmBuffer` instance.
-    unsafe { Uint8Array::view(self.data.as_ref()) }
-  }
-}
 
 /// The main renderer for Takumi image rendering engine.
 #[wasm_bindgen]
@@ -176,16 +144,14 @@ impl Renderer {
     &self,
     node: AnyNode,
     options: Option<RenderOptionsType>,
-  ) -> Result<WasmBuffer, JsValue> {
+  ) -> Result<Vec<u8>, JsValue> {
     let node: NodeKind = from_value(node.into()).map_err(map_error)?;
     let options: RenderOptions = options
       .map(|options| from_value(options.into()).map_err(map_error))
       .transpose()?
       .unwrap_or_default();
 
-    self
-      .render_internal(node, options)
-      .map(WasmBuffer::from_vec)
+    self.render_internal(node, options)
   }
 
   fn render_internal(&self, node: NodeKind, options: RenderOptions) -> Result<Vec<u8>, JsValue> {
@@ -322,7 +288,7 @@ impl Renderer {
     &self,
     frames: Vec<AnimationFrameSourceType>,
     options: RenderAnimationOptionsType,
-  ) -> Result<WasmBuffer, JsValue> {
+  ) -> Result<Vec<u8>, JsValue> {
     let frames: Vec<AnimationFrameSource> = from_value(frames.into()).map_err(map_error)?;
     let options: RenderAnimationOptions = from_value(options.into()).map_err(map_error)?;
 
@@ -354,6 +320,6 @@ impl Renderer {
       }
     }
 
-    Ok(WasmBuffer::from_vec(buffer))
+    Ok(buffer)
   }
 }
