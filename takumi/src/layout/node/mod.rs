@@ -250,7 +250,7 @@ pub trait Node<N: Node<N>>: Send + Sync + Clone {
     };
 
     for child in children {
-      child.collect_fetch_tasks(collection);
+      child.collect_style_fetch_tasks(collection);
     }
   }
 
@@ -582,3 +582,37 @@ impl_node_enum!(
   Image => ImageNode,
   Text => TextNode
 );
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use super::*;
+
+  #[test]
+  fn collect_style_fetch_tasks_collects_nested_background_image_urls() {
+    let background_url = "https://placehold.co/80x80/22c55e/white";
+    let node: NodeKind = serde_json::from_value(json!({
+      "type": "container",
+      "children": [
+        {
+          "type": "container",
+          "style": {
+            "backgroundImage": format!("url({background_url})"),
+          }
+        }
+      ]
+    }))
+    .unwrap();
+
+    let mut collection = FetchTaskCollection::default();
+    node.collect_style_fetch_tasks(&mut collection);
+    let tasks = collection
+      .into_inner()
+      .iter()
+      .map(ToString::to_string)
+      .collect::<Vec<_>>();
+
+    assert_eq!(tasks, vec![background_url.to_string()]);
+  }
+}

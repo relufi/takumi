@@ -107,6 +107,28 @@ describe("extractResourceUrls", () => {
     const tasks = extractResourceUrls(node);
     expect(tasks).toEqual([remoteUrl]);
   });
+
+  test("extracts nested backgroundImage URLs", () => {
+    const nestedBackgroundUrl = "https://placehold.co/80x80/22c55e/white";
+    const nestedNode = container({
+      children: [
+        container({
+          style: {
+            backgroundImage: `url(${nestedBackgroundUrl})`,
+            width: 80,
+            height: 80,
+          },
+        }),
+      ],
+      style: {
+        width: 100,
+        height: 100,
+      },
+    });
+
+    const tasks = extractResourceUrls(nestedNode);
+    expect(tasks).toEqual([nestedBackgroundUrl]);
+  });
 });
 
 describe("render", () => {
