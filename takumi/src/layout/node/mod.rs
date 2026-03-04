@@ -585,25 +585,38 @@ impl_node_enum!(
 
 #[cfg(test)]
 mod tests {
-  use serde_json::json;
 
   use super::*;
 
   #[test]
   fn collect_style_fetch_tasks_collects_nested_background_image_urls() {
     let background_url = "https://placehold.co/80x80/22c55e/white";
-    let node: NodeKind = serde_json::from_value(json!({
-      "type": "container",
-      "children": [
-        {
-          "type": "container",
-          "style": {
-            "backgroundImage": format!("url({background_url})"),
-          }
+    let node = NodeKind::Container(ContainerNode {
+      children: Some(
+        [ContainerNode {
+          children: None,
+          style: Some(Style {
+            background_image: CssValue::Value(Some(
+              [BackgroundImage::Url(background_url.into())].into(),
+            )),
+            ..Default::default()
+          }),
+          tag_name: None,
+          class_name: None,
+          id: None,
+          preset: None,
+          tw: None,
         }
-      ]
-    }))
-    .unwrap();
+        .into()]
+        .into(),
+      ),
+      style: None,
+      tag_name: None,
+      class_name: None,
+      id: None,
+      preset: None,
+      tw: None,
+    });
 
     let mut collection = FetchTaskCollection::default();
     node.collect_style_fetch_tasks(&mut collection);
