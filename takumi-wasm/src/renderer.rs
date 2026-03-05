@@ -17,8 +17,9 @@ use takumi::{
   layout::{DEFAULT_DEVICE_PIXEL_RATIO, DEFAULT_FONT_SIZE, Viewport, node::NodeKind},
   parley::{FontWeight, fontique::FontInfoOverride},
   rendering::{
-    AnimationFrame, ImageOutputFormat, RenderOptionsBuilder, encode_animated_png,
-    encode_animated_webp, measure_layout, render, write_image,
+    AnimatedGifOptions, AnimatedPngOptions, AnimatedWebpOptions, AnimationFrame, ImageOutputFormat,
+    RenderOptionsBuilder, encode_animated_gif, encode_animated_png, encode_animated_webp,
+    measure_layout, render, write_image,
   },
   resources::image::load_image_source_from_bytes,
 };
@@ -314,15 +315,37 @@ impl Renderer {
       })
       .collect::<Result<Vec<_>, JsValue>>()?;
 
+    if let Some(quality) = options.quality
+      && quality > 100
+    {
+      return Err(JsValue::from_str(&format!(
+        "Invalid WebP quality {quality}; expected a value in 0..=100"
+      )));
+    }
+
     let mut buffer = Vec::new();
 
     match options.format.unwrap_or(AnimationOutputFormat::WebP) {
       AnimationOutputFormat::WebP => {
-        encode_animated_webp(&rendered_frames, &mut buffer, true, false, None)
+        let mut webp_options = AnimatedWebpOptions::default();
+        if let Some(quality) = options.quality {
+          webp_options.quality = quality;
+        }
+
+        encode_animated_webp(Cow::Owned(rendered_frames), &mut buffer, webp_options)
           .map_err(map_error)?;
       }
       AnimationOutputFormat::APng => {
-        encode_animated_png(&rendered_frames, &mut buffer, None).map_err(map_error)?;
+        encode_animated_png(&rendered_frames, &mut buffer, AnimatedPngOptions::default())
+          .map_err(map_error)?;
+      }
+      AnimationOutputFormat::Gif => {
+        encode_animated_gif(
+          Cow::Owned(rendered_frames),
+          &mut buffer,
+          AnimatedGifOptions::default(),
+        )
+        .map_err(map_error)?;
       }
     }
 

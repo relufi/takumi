@@ -13,7 +13,8 @@ use takumi::{
   GlobalContext,
   layout::{Viewport, node::NodeKind},
   rendering::{
-    AnimationFrame, ImageOutputFormat, RenderOptions, RenderOptionsBuilder, encode_animated_png,
+    AnimatedGifOptions, AnimatedPngOptions, AnimatedWebpOptions, AnimationFrame, ImageOutputFormat,
+    RenderOptions, RenderOptionsBuilder, encode_animated_gif, encode_animated_png,
     encode_animated_webp, render, write_image,
   },
   resources::image::{ImageSource, parse_svg_str},
@@ -183,48 +184,52 @@ fn save_image<P: AsRef<Path>>(image: RgbaImage, path: P, format: ImageOutputForm
 pub fn run_webp_animation_test(
   nodes: Vec<(NodeKind, u32)>,
   fixture_name: &str,
-  blend: bool,
-  dispose: bool,
-  loop_count: Option<u16>,
+  options: AnimatedWebpOptions,
 ) {
-  assert_ne!(nodes.len(), 0);
+  assert!(!nodes.is_empty());
 
   let viewport = create_test_viewport();
-
-  let frames: Vec<_> = nodes
-    .into_par_iter()
-    .map(|(node, duration_ms)| {
-      AnimationFrame::new(
-        render(
-          RenderOptionsBuilder::default()
-            .viewport(viewport)
-            .node(node)
-            .global(&CONTEXT)
-            .build()
-            .unwrap(),
-        )
-        .unwrap(),
-        duration_ms,
-      )
-    })
-    .collect();
+  let frames = build_animation_frames(nodes, viewport);
 
   let fixture_path = format!("tests/fixtures-generated/{}", fixture_name);
   let mut out = File::create(fixture_path).unwrap();
-  encode_animated_webp(&frames, &mut out, blend, dispose, loop_count).unwrap();
+  encode_animated_webp(Cow::Owned(frames), &mut out, options).unwrap();
 }
 
 #[allow(dead_code)]
 pub fn run_png_animation_test(
   nodes: Vec<(NodeKind, u32)>,
   fixture_name: &str,
-  loop_count: Option<u16>,
+  options: AnimatedPngOptions,
 ) {
-  assert_ne!(nodes.len(), 0);
+  assert!(!nodes.is_empty());
 
   let viewport = create_test_viewport();
+  let frames = build_animation_frames(nodes, viewport);
 
-  let frames: Vec<_> = nodes
+  let fixture_path = format!("tests/fixtures-generated/{}", fixture_name);
+  let mut out = File::create(fixture_path).unwrap();
+  encode_animated_png(&frames, &mut out, options).unwrap();
+}
+
+#[allow(dead_code)]
+pub fn run_gif_animation_test(
+  nodes: Vec<(NodeKind, u32)>,
+  fixture_name: &str,
+  options: AnimatedGifOptions,
+) {
+  assert!(!nodes.is_empty());
+
+  let viewport = create_test_viewport();
+  let frames = build_animation_frames(nodes, viewport);
+
+  let fixture_path = format!("tests/fixtures-generated/{}", fixture_name);
+  let mut out = File::create(fixture_path).unwrap();
+  encode_animated_gif(Cow::Owned(frames), &mut out, options).unwrap();
+}
+
+fn build_animation_frames(nodes: Vec<(NodeKind, u32)>, viewport: Viewport) -> Vec<AnimationFrame> {
+  nodes
     .into_par_iter()
     .map(|(node, duration_ms)| {
       AnimationFrame::new(
@@ -240,9 +245,5 @@ pub fn run_png_animation_test(
         duration_ms,
       )
     })
-    .collect();
-
-  let fixture_path = format!("tests/fixtures-generated/{}", fixture_name);
-  let mut out = File::create(fixture_path).unwrap();
-  encode_animated_png(&frames, &mut out, loop_count).unwrap();
+    .collect()
 }

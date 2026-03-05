@@ -136,8 +136,10 @@ pub struct RenderAnimationOptions {
   pub width: u32,
   /// The height of each frame in pixels.
   pub height: u32,
-  /// The output animation format (WebP or APNG).
+  /// The output animation format (WebP, APNG, or GIF).
   pub format: Option<AnimationOutputFormat>,
+  /// The quality of WebP format (0-100). Ignored for APNG and GIF.
+  pub quality: Option<u8>,
 }
 
 /// Output format for animated images.
@@ -149,6 +151,8 @@ pub enum AnimationOutputFormat {
   webp,
   /// Animated PNG format.
   apng,
+  /// Animated GIF format.
+  gif,
 }
 
 /// Output format for static images.
@@ -541,6 +545,7 @@ impl Renderer {
         state: Arc::clone(&self.state),
         viewport: (options.width, options.height).into(),
         format: options.format.unwrap_or(AnimationOutputFormat::webp),
+        quality: options.quality,
         draw_debug_border: options.draw_debug_border.unwrap_or_default(),
       },
       signal,

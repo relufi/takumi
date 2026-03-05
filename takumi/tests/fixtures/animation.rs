@@ -3,8 +3,9 @@ use takumi::layout::{
   node::{ContainerNode, NodeKind, TextNode},
   style::{Length::*, *},
 };
+use takumi::rendering::{AnimatedGifOptions, AnimatedPngOptions, AnimatedWebpOptions};
 
-use crate::test_utils::{run_png_animation_test, run_webp_animation_test};
+use crate::test_utils::{run_gif_animation_test, run_png_animation_test, run_webp_animation_test};
 
 fn create_bouncing_text_nodes() -> Vec<(NodeKind, u32)> {
   const FPS: u32 = 30;
@@ -89,9 +90,28 @@ fn animation_bouncing_text_webp() {
   run_webp_animation_test(
     create_bouncing_text_nodes(),
     "animation_bouncing_text.webp",
-    true,
-    false,
-    None,
+    AnimatedWebpOptions {
+      blend: true,
+      dispose: false,
+      loop_count: None,
+      quality: 100,
+      speed: None,
+    },
+  );
+}
+
+#[test]
+fn animation_bouncing_text_webp_lossy() {
+  run_webp_animation_test(
+    create_bouncing_text_nodes(),
+    "animation_bouncing_text_lossy.webp",
+    AnimatedWebpOptions {
+      blend: false,
+      dispose: false,
+      loop_count: Some(1),
+      quality: 75,
+      speed: Some(4),
+    },
   );
 }
 
@@ -100,6 +120,15 @@ fn animation_bouncing_text_png() {
   run_png_animation_test(
     create_bouncing_text_nodes(),
     "animation_bouncing_text.png",
-    None,
+    AnimatedPngOptions { loop_count: None },
+  );
+}
+
+#[test]
+fn animation_bouncing_text_gif() {
+  run_gif_animation_test(
+    create_bouncing_text_nodes(),
+    "animation_bouncing_text.gif",
+    AnimatedGifOptions { loop_count: None },
   );
 }
