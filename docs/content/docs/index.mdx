@@ -84,7 +84,7 @@ Most setup issues come from bundling native modules or WASM assets.
 
 const nextConfig = {
   // [!code ++]
-  serverExternalPackages: ["@takumi-rs/image-response"],
+  serverExternalPackages: ["@takumi-rs/core"],
 };
 
 export default nextConfig;
@@ -100,7 +100,7 @@ export default defineConfig({
   },
   ssr: {
     // [!code ++]
-    external: ["@takumi-rs/image-response"],
+    external: ["@takumi-rs/core"],
   },
 });
 ```
