@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { container, image, text } from "@takumi-rs/helpers";
+import { fromJsx } from "@takumi-rs/helpers/jsx";
 import { Glob } from "bun";
 import { extractResourceUrls, Renderer, type RenderOptions } from "../index";
 
@@ -221,6 +222,50 @@ describe("render", () => {
 
   test("with no options provided", async () => {
     const result = await renderer.render(node);
+
+    expect(result).toBeInstanceOf(Buffer);
+  });
+
+  test("does not panic when inline text contains a nested flex span", async () => {
+    const { node, stylesheets } = await fromJsx(
+      <div
+        style={{
+          display: "flex",
+          width: "100%",
+          height: "100%",
+          backgroundColor: "#15202b",
+          padding: "40px",
+        }}
+      >
+        <span
+          style={{
+            fontSize: "22px",
+            color: "#ffffff",
+            lineHeight: "1.5",
+          }}
+        >
+          Just deployed our new rendering pipeline!
+          <span
+            style={{
+              display: "flex",
+              gap: "4px",
+              marginLeft: "8px",
+              color: "#fcd34d",
+            }}
+          >
+            <span>Rocket</span>
+            <span>Sparkles</span>
+          </span>
+        </span>
+      </div>,
+    );
+
+    const result = await renderer.render(node, {
+      width: 1200,
+      height: 630,
+      format: "png",
+      stylesheets,
+    });
 
     expect(result).toBeInstanceOf(Buffer);
   });

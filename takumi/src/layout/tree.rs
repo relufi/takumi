@@ -592,7 +592,7 @@ impl<N: Node<N>> RoundTree for LayoutTree<'_, '_, N> {
 }
 
 impl<'g, N: Node<N>> RenderNode<'g, N> {
-  fn anonymous_text_item(parent_context: &RenderContext<'g>, text: String) -> Self {
+  fn anonymous_box_context(parent_context: &RenderContext<'g>) -> RenderContext<'g> {
     let mut context = parent_context.clone();
     context.style.display = Display::Block;
     context.style.opacity = PercentageNumber(1.0);
@@ -615,6 +615,11 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
     context.style.translate = None;
     context.style.translate_x = None;
     context.style.translate_y = None;
+    context
+  }
+
+  fn anonymous_text_item(parent_context: &RenderContext<'g>, text: String) -> Self {
+    let context = Self::anonymous_box_context(parent_context);
 
     Self {
       context,
@@ -626,6 +631,23 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
       }),
       anonymous_text_content: Some(text),
       force_inline_layout: true,
+    }
+  }
+
+  fn anonymous_block_container(
+    parent_context: &RenderContext<'g>,
+    children: Vec<RenderNode<'g, N>>,
+  ) -> Self {
+    Self {
+      context: Self::anonymous_box_context(parent_context),
+      node: None,
+      children: Some(children.into_boxed_slice()),
+      layout_style_override: Some(Style {
+        display: TaffyDisplay::Block,
+        ..Style::default()
+      }),
+      anonymous_text_content: None,
+      force_inline_layout: false,
     }
   }
 
@@ -910,8 +932,13 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
         } else {
           let has_inline = children.iter().any(RenderNode::is_inline_level);
           let has_block = children.iter().any(|child| !child.is_inline_level());
-          let needs_anonymous_boxes =
-            !finished.context.style.display.is_inline() && has_inline && has_block;
+          let requires_inline_parent_blockification =
+            finished.context.style.display.is_inline() && has_block;
+          let needs_anonymous_boxes = has_inline && has_block;
+
+          if requires_inline_parent_blockification {
+            finished.context.style.display = finished.context.style.display.as_blockified();
+          }
 
           if !needs_anonymous_boxes {
             RenderNode {
@@ -923,15 +950,8 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
               force_inline_layout: false,
             }
           } else {
-            finished.context.style.display = finished.context.style.display.as_blockified();
-
             let mut final_children = Vec::new();
             let mut inline_group = Vec::new();
-
-            let anonymous_box_style = ResolvedStyle {
-              display: Display::Block,
-              ..ResolvedStyle::default()
-            };
 
             for item in children {
               if item.is_inline_level() {
@@ -939,22 +959,12 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
                 continue;
               }
 
-              flush_inline_group(
-                &mut inline_group,
-                &mut final_children,
-                &anonymous_box_style,
-                &finished.context,
-              );
+              flush_inline_group(&mut inline_group, &mut final_children, &finished.context);
 
               final_children.push(item);
             }
 
-            flush_inline_group(
-              &mut inline_group,
-              &mut final_children,
-              &anonymous_box_style,
-              &finished.context,
-            );
+            flush_inline_group(&mut inline_group, &mut final_children, &finished.context);
 
             RenderNode {
               context: finished.context,
@@ -1117,41 +1127,16 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
 fn flush_inline_group<'g, N: Node<N>>(
   inline_group: &mut Vec<RenderNode<'g, N>>,
   final_children: &mut Vec<RenderNode<'g, N>>,
-  anonymous_box_style: &ResolvedStyle,
   parent_render_context: &RenderContext<'g>,
 ) {
   if inline_group.is_empty() {
     return;
   }
 
-  if inline_group.len() == 1 {
-    let Some(mut child) = inline_group.pop() else {
-      unreachable!();
-    };
-
-    child.context.style.display.blockify();
-
-    final_children.push(child);
-  } else {
-    final_children.push(RenderNode {
-      context: RenderContext {
-        style: Box::new(anonymous_box_style.clone()),
-        global: parent_render_context.global,
-        transform: parent_render_context.transform,
-        sizing: parent_render_context.sizing.clone(),
-        current_color: parent_render_context.current_color,
-        draw_debug_border: parent_render_context.draw_debug_border,
-        fetched_resources: Default::default(),
-        #[cfg(feature = "css_stylesheet_parsing")]
-        stylesheets: parent_render_context.stylesheets.clone(),
-      },
-      children: Some(take(inline_group).into_boxed_slice()),
-      node: None,
-      layout_style_override: None,
-      anonymous_text_content: None,
-      force_inline_layout: false,
-    });
-  }
+  final_children.push(RenderNode::anonymous_block_container(
+    parent_render_context,
+    take(inline_group),
+  ));
 }
 
 #[cfg(test)]
