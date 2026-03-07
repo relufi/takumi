@@ -363,10 +363,10 @@ impl<'a> InterpolationSegment<'a> {
   ) -> Self {
     let mut animated_properties = PropertyMask::new();
     if let Some(mask) = from_mask {
-      animated_properties.extend(mask.iter().copied());
+      animated_properties.extend(mask.iter());
     }
     if let Some(mask) = to_mask {
-      animated_properties.extend(mask.iter().copied());
+      animated_properties.extend(mask.iter());
     }
     Self {
       from_style,
@@ -541,7 +541,6 @@ fn resolve_length_with_sizing<const DEFAULT_AUTO: bool>(
 
 #[cfg(all(test, feature = "css_stylesheet_parsing"))]
 mod tests {
-  use std::collections::BTreeSet;
   use std::rc::Rc;
 
   use taffy::Size;
@@ -1117,7 +1116,7 @@ mod tests {
       height: Length::Px(200.0),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::Width]);
+    let animated_properties: PropertyMask = [LonghandId::Width].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1140,7 +1139,7 @@ mod tests {
       rotate: Some(Angle::new(45.0)),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::Rotate]);
+    let animated_properties: PropertyMask = [LonghandId::Rotate].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1162,7 +1161,7 @@ mod tests {
       flex_grow: Some(FlexGrow(4.0)),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::FlexGrow]);
+    let animated_properties: PropertyMask = [LonghandId::FlexGrow].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1184,7 +1183,7 @@ mod tests {
       flex_shrink: Some(FlexGrow(3.0)),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::FlexShrink]);
+    let animated_properties: PropertyMask = [LonghandId::FlexShrink].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1206,7 +1205,8 @@ mod tests {
       webkit_text_stroke_width: Some(Length::Px(6.0)),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::WebkitTextStrokeWidth]);
+    let animated_properties: PropertyMask =
+      [LonghandId::WebkitTextStrokeWidth].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1228,7 +1228,8 @@ mod tests {
       webkit_text_stroke_color: Some(ColorInput::Value(Color([110, 120, 130, 255]))),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::WebkitTextStrokeColor]);
+    let animated_properties: PropertyMask =
+      [LonghandId::WebkitTextStrokeColor].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,
@@ -1257,7 +1258,7 @@ mod tests {
       webkit_text_fill_color: Some(ColorInput::Value(Color([120, 140, 160, 255]))),
       ..ComputedStyle::default()
     };
-    let animated_properties = BTreeSet::from([LonghandId::WebkitTextFillColor]);
+    let animated_properties: PropertyMask = [LonghandId::WebkitTextFillColor].into_iter().collect();
 
     base_style.apply_interpolated_properties(
       &from,

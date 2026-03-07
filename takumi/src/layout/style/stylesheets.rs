@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeSet, marker::PhantomData};
+use std::{borrow::Cow, marker::PhantomData};
 
 use cssparser::{Parser, Token, match_ignore_ascii_case};
 use parley::{FontSettings, FontStack, TextStyle};
@@ -248,9 +248,19 @@ macro_rules! define_style {
     }
   ) => {
     paste! {
+      #[repr(u8)]
       #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
       pub(crate) enum LonghandId {
         $([<$longhand:camel>],)*
+      }
+
+      impl LonghandId {
+        const COUNT: usize = 0 $(+ { let _ = Self::[<$longhand:camel>]; 1 })*;
+        const ALL: [Self; Self::COUNT] = [$(Self::[<$longhand:camel>],)*];
+
+        const fn index(self) -> usize {
+          self as usize
+        }
       }
 
       #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1113,8 +1123,98 @@ impl<'i> FromCss<'i> for CssWideKeyword {
   }
 }
 
-#[cfg(feature = "css_stylesheet_parsing")]
-pub(crate) type PropertyMask = BTreeSet<LonghandId>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PropertyMask {
+  words: [usize; Self::WORD_COUNT],
+}
+
+impl PropertyMask {
+  const BITS_PER_WORD: usize = usize::BITS as usize;
+  const WORD_COUNT: usize = LonghandId::COUNT.div_ceil(Self::BITS_PER_WORD);
+
+  pub(crate) const fn new() -> Self {
+    Self {
+      words: [0; Self::WORD_COUNT],
+    }
+  }
+
+  pub(crate) fn is_empty(&self) -> bool {
+    self.words.iter().all(|word| *word == 0)
+  }
+
+  pub(crate) fn insert(&mut self, property: LonghandId) -> bool {
+    let word_index = property.index() / Self::BITS_PER_WORD;
+    let bit_index = property.index() % Self::BITS_PER_WORD;
+    let bit = 1usize << bit_index;
+    let word = &mut self.words[word_index];
+    let was_present = (*word & bit) != 0;
+    *word |= bit;
+    !was_present
+  }
+
+  pub(crate) fn contains(&self, property: &LonghandId) -> bool {
+    let word_index = property.index() / Self::BITS_PER_WORD;
+    let bit_index = property.index() % Self::BITS_PER_WORD;
+    (self.words[word_index] & (1usize << bit_index)) != 0
+  }
+
+  pub(crate) fn append(&mut self, other: &mut Self) {
+    for (word, other_word) in self.words.iter_mut().zip(other.words.iter_mut()) {
+      *word |= *other_word;
+      *other_word = 0;
+    }
+  }
+
+  pub(crate) fn iter(&self) -> PropertyMaskIter<'_> {
+    PropertyMaskIter {
+      mask: self,
+      next_index: 0,
+    }
+  }
+}
+
+impl Default for PropertyMask {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl Extend<LonghandId> for PropertyMask {
+  fn extend<T: IntoIterator<Item = LonghandId>>(&mut self, iter: T) {
+    for property in iter {
+      self.insert(property);
+    }
+  }
+}
+
+impl FromIterator<LonghandId> for PropertyMask {
+  fn from_iter<T: IntoIterator<Item = LonghandId>>(iter: T) -> Self {
+    let mut mask = Self::new();
+    mask.extend(iter);
+    mask
+  }
+}
+
+pub(crate) struct PropertyMaskIter<'a> {
+  mask: &'a PropertyMask,
+  next_index: usize,
+}
+
+impl Iterator for PropertyMaskIter<'_> {
+  type Item = LonghandId;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    while self.next_index < LonghandId::COUNT {
+      let property = LonghandId::ALL[self.next_index];
+      self.next_index += 1;
+      if self.mask.contains(&property) {
+        return Some(property);
+      }
+    }
+
+    None
+  }
+}
 
 /// Ordered specified declarations plus the set of important longhands.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1122,7 +1222,7 @@ pub struct StyleDeclarationBlock {
   /// Ordered declarations in source order.
   pub(crate) declarations: SmallVec<[StyleDeclaration; 8]>,
   /// Longhands that were marked with `!important`.
-  pub(crate) importance_set: BTreeSet<LonghandId>,
+  pub(crate) importance_set: PropertyMask,
 }
 
 impl StyleDeclarationBlock {
