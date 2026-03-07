@@ -2,15 +2,48 @@ mod test_utils;
 
 use takumi::{
   layout::{
+    DEFAULT_FONT_SIZE, Viewport,
     node::{ContainerNode, ImageNode, NodeKind, TextNode},
     style::{
       Affine, AlignItems, Color, ColorInput, Display, FlexDirection, JustifyContent, Length::*,
-      Position, Sides, StyleBuilder,
+      Position, Sides, Style, StyleDeclaration,
     },
   },
   rendering::{MeasuredNode, MeasuredTextRun, RenderOptionsBuilder, measure_layout},
 };
-use test_utils::{CONTEXT, create_test_viewport};
+use test_utils::CONTEXT;
+
+fn create_measure_viewport() -> Viewport {
+  (1200, 630).into()
+}
+
+fn create_measure_viewport_with_dpr(device_pixel_ratio: f32) -> Viewport {
+  Viewport {
+    width: Some((1200.0 * device_pixel_ratio) as u32),
+    height: Some((630.0 * device_pixel_ratio) as u32),
+    font_size: DEFAULT_FONT_SIZE,
+    device_pixel_ratio,
+  }
+}
+
+fn measure(node: NodeKind, viewport: Viewport) -> MeasuredNode {
+  measure_layout(
+    RenderOptionsBuilder::default()
+      .viewport(viewport)
+      .node(node)
+      .global(&CONTEXT)
+      .build()
+      .unwrap(),
+  )
+  .unwrap()
+}
+
+fn assert_close(actual: f32, expected: f32) {
+  assert!(
+    (actual - expected).abs() <= 0.01,
+    "expected {expected}, got {actual}"
+  );
+}
 
 #[test]
 fn test_measure_simple_container() {
@@ -21,12 +54,12 @@ fn test_measure_simple_container() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Px(100.0))
-        .height(Px(100.0))
-        .background_color(ColorInput::Value(Color([255, 0, 0, 255])))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Px(100.0)))
+        .with(StyleDeclaration::height(Px(100.0)))
+        .with(StyleDeclaration::background_color(ColorInput::Value(
+          Color([255, 0, 0, 255]),
+        ))),
     ),
     children: None,
   }
@@ -34,7 +67,7 @@ fn test_measure_simple_container() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -63,11 +96,9 @@ fn test_measure_text_node() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Px(300.0))
-        .font_size(Some(Px(20.0)))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Px(300.0)))
+        .with(StyleDeclaration::font_size(Px(20.0).into())),
     ),
     text: "Hello World".to_string(),
   }
@@ -75,7 +106,7 @@ fn test_measure_text_node() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -116,15 +147,13 @@ fn test_measure_flex_text_node_centers_inner_text() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Px(300.0))
-        .height(Px(120.0))
-        .display(Display::Flex)
-        .justify_content(JustifyContent::Center)
-        .align_items(AlignItems::Center)
-        .font_size(Some(Px(20.0)))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Px(300.0)))
+        .with(StyleDeclaration::height(Px(120.0)))
+        .with(StyleDeclaration::display(Display::Flex))
+        .with(StyleDeclaration::justify_content(JustifyContent::Center))
+        .with(StyleDeclaration::align_items(AlignItems::Center))
+        .with(StyleDeclaration::font_size(Px(20.0).into())),
     ),
     text: "Hello World".to_string(),
   }
@@ -132,7 +161,7 @@ fn test_measure_flex_text_node_centers_inner_text() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -173,15 +202,13 @@ fn test_measure_flex_text_node_anonymous_item_uses_intrinsic_size() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Px(300.0))
-        .height(Px(120.0))
-        .display(Display::Flex)
-        .justify_content(JustifyContent::Center)
-        .align_items(AlignItems::Center)
-        .font_size(Some(Px(20.0)))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Px(300.0)))
+        .with(StyleDeclaration::height(Px(120.0)))
+        .with(StyleDeclaration::display(Display::Flex))
+        .with(StyleDeclaration::justify_content(JustifyContent::Center))
+        .with(StyleDeclaration::align_items(AlignItems::Center))
+        .with(StyleDeclaration::font_size(Px(20.0).into())),
     ),
     text: "Hello World".to_string(),
   }
@@ -189,7 +216,7 @@ fn test_measure_flex_text_node_anonymous_item_uses_intrinsic_size() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -223,13 +250,11 @@ fn test_measure_inline_layout() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Px(400.0))
-        .height(Px(300.0))
-        .font_size(Some(Px(20.0)))
-        .display(Display::Block)
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Px(400.0)))
+        .with(StyleDeclaration::height(Px(300.0)))
+        .with(StyleDeclaration::font_size(Px(20.0).into()))
+        .with(StyleDeclaration::display(Display::Block)),
     ),
     children: Some(
       vec![
@@ -239,12 +264,7 @@ fn test_measure_inline_layout() {
           tag_name: None,
           preset: None,
           tw: None,
-          style: Some(
-            StyleBuilder::default()
-              .display(Display::Inline)
-              .build()
-              .unwrap(),
-          ),
+          style: Some(Style::default().with(StyleDeclaration::display(Display::Inline))),
           text: "Hello World".to_string(),
         }
         .into(),
@@ -255,11 +275,11 @@ fn test_measure_inline_layout() {
           preset: None,
           tw: None,
           style: Some(
-            StyleBuilder::default()
-              .display(Display::Inline)
-              .background_color(ColorInput::Value(Color([255, 0, 0, 255])))
-              .build()
-              .unwrap(),
+            Style::default()
+              .with(StyleDeclaration::display(Display::Inline))
+              .with(StyleDeclaration::background_color(ColorInput::Value(
+                Color([255, 0, 0, 255]),
+              ))),
           ),
           width: None,
           height: None,
@@ -272,12 +292,7 @@ fn test_measure_inline_layout() {
           tag_name: None,
           preset: None,
           tw: None,
-          style: Some(
-            StyleBuilder::default()
-              .display(Display::Inline)
-              .build()
-              .unwrap(),
-          ),
+          style: Some(Style::default().with(StyleDeclaration::display(Display::Inline))),
           text: "This is Takumi Speaking".to_string(),
         }
         .into(),
@@ -289,7 +304,7 @@ fn test_measure_inline_layout() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -338,6 +353,144 @@ fn test_measure_inline_layout() {
 }
 
 #[test]
+fn test_measure_text_node_rem_font_size_matches_px_when_dpr_is_below_one() {
+  let viewport = create_measure_viewport_with_dpr(0.75);
+  let text = "Rem font size still applies".to_string();
+
+  let rem_result = measure(
+    TextNode {
+      class_name: None,
+      id: None,
+      tag_name: None,
+      preset: None,
+      tw: None,
+      style: Some(
+        Style::default()
+          .with(StyleDeclaration::width(Px(400.0)))
+          .with(StyleDeclaration::font_size(Rem(1.0).into())),
+      ),
+      text: text.clone(),
+    }
+    .into(),
+    viewport,
+  );
+
+  let px_result = measure(
+    TextNode {
+      class_name: None,
+      id: None,
+      tag_name: None,
+      preset: None,
+      tw: None,
+      style: Some(
+        Style::default()
+          .with(StyleDeclaration::width(Px(400.0)))
+          .with(StyleDeclaration::font_size(Px(16.0).into())),
+      ),
+      text,
+    }
+    .into(),
+    viewport,
+  );
+
+  assert_eq!(rem_result.children.len(), 1);
+  assert_eq!(px_result.children.len(), 1);
+
+  let rem_text = &rem_result.children[0];
+  let px_text = &px_result.children[0];
+
+  assert_close(rem_result.height, px_result.height);
+  assert_close(rem_text.width, px_text.width);
+  assert_close(rem_text.height, px_text.height);
+  assert_close(rem_text.runs[0].width, px_text.runs[0].width);
+  assert_close(rem_text.runs[0].height, px_text.runs[0].height);
+}
+
+#[test]
+fn test_measure_nested_em_font_size_inherits_correctly_from_rem_when_dpr_is_below_one() {
+  let viewport = create_measure_viewport_with_dpr(0.75);
+
+  let rem_parent_result = measure(
+    ContainerNode {
+      class_name: None,
+      id: None,
+      tag_name: None,
+      preset: None,
+      tw: None,
+      style: Some(
+        Style::default()
+          .with(StyleDeclaration::width(Px(400.0)))
+          .with(StyleDeclaration::font_size(Rem(1.0).into())),
+      ),
+      children: Some(
+        vec![
+          TextNode {
+            class_name: None,
+            id: None,
+            tag_name: None,
+            preset: None,
+            tw: None,
+            style: Some(Style::default().with(StyleDeclaration::font_size(Em(2.0).into()))),
+            text: "Nested em".to_string(),
+          }
+          .into(),
+        ]
+        .into_boxed_slice(),
+      ),
+    }
+    .into(),
+    viewport,
+  );
+
+  let px_parent_result = measure(
+    ContainerNode {
+      class_name: None,
+      id: None,
+      tag_name: None,
+      preset: None,
+      tw: None,
+      style: Some(
+        Style::default()
+          .with(StyleDeclaration::width(Px(400.0)))
+          .with(StyleDeclaration::font_size(Px(16.0).into())),
+      ),
+      children: Some(
+        vec![
+          TextNode {
+            class_name: None,
+            id: None,
+            tag_name: None,
+            preset: None,
+            tw: None,
+            style: Some(Style::default().with(StyleDeclaration::font_size(Em(2.0).into()))),
+            text: "Nested em".to_string(),
+          }
+          .into(),
+        ]
+        .into_boxed_slice(),
+      ),
+    }
+    .into(),
+    viewport,
+  );
+
+  assert_eq!(rem_parent_result.children.len(), 1);
+  assert_eq!(px_parent_result.children.len(), 1);
+
+  let rem_text = &rem_parent_result.children[0].children[0];
+  let px_text = &px_parent_result.children[0].children[0];
+
+  assert_close(
+    rem_parent_result.children[0].height,
+    px_parent_result.children[0].height,
+  );
+  assert_close(rem_text.width, px_text.width);
+  assert_close(rem_text.height, px_text.height);
+  assert_close(rem_text.runs[0].width, px_text.runs[0].width);
+  assert_close(rem_text.runs[0].height, px_text.runs[0].height);
+}
+
+#[test]
 fn test_measure_svg_attr_size_in_absolute_flex_container() {
   let svg = r##"<svg width="100" height="100" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 0L24.4903 15.5097L40 20L24.4903 24.4903L20 40L15.5097 24.4903L0 20L15.5097 15.5097L20 0Z" fill="#E0FF25"/></svg>"##;
 
@@ -348,11 +501,9 @@ fn test_measure_svg_attr_size_in_absolute_flex_container() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Percentage(100.0))
-        .height(Percentage(100.0))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Percentage(100.0)))
+        .with(StyleDeclaration::height(Percentage(100.0))),
     ),
     children: Some(
       [ContainerNode {
@@ -362,12 +513,10 @@ fn test_measure_svg_attr_size_in_absolute_flex_container() {
         preset: None,
         tw: None,
         style: Some(
-          StyleBuilder::default()
-            .position(Position::Absolute)
-            .inset(Sides([Auto, Px(40.0), Px(40.0), Auto]))
-            .display(Display::Flex)
-            .build()
-            .unwrap(),
+          Style::default()
+            .with(StyleDeclaration::position(Position::Absolute))
+            .with_inset(Sides([Auto, Px(40.0), Px(40.0), Auto]))
+            .with(StyleDeclaration::display(Display::Flex)),
         ),
         children: Some(
           [ImageNode {
@@ -393,7 +542,7 @@ fn test_measure_svg_attr_size_in_absolute_flex_container() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -429,16 +578,14 @@ fn test_measure_svg_attr_size_in_absolute_flex_container_with_parent_padding() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Percentage(100.0))
-        .height(Percentage(100.0))
-        .position(Position::Relative)
-        .display(Display::Flex)
-        .flex_direction(FlexDirection::Column)
-        .justify_content(JustifyContent::Center)
-        .padding(Sides([Px(60.0); 4]))
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Percentage(100.0)))
+        .with(StyleDeclaration::height(Percentage(100.0)))
+        .with(StyleDeclaration::position(Position::Relative))
+        .with(StyleDeclaration::display(Display::Flex))
+        .with(StyleDeclaration::flex_direction(FlexDirection::Column))
+        .with(StyleDeclaration::justify_content(JustifyContent::Center))
+        .with_padding(Sides([Px(60.0); 4])),
     ),
     children: Some(
       [ContainerNode {
@@ -448,12 +595,10 @@ fn test_measure_svg_attr_size_in_absolute_flex_container_with_parent_padding() {
         preset: None,
         tw: None,
         style: Some(
-          StyleBuilder::default()
-            .position(Position::Absolute)
-            .inset(Sides([Auto, Px(60.0), Px(60.0), Auto]))
-            .display(Display::Flex)
-            .build()
-            .unwrap(),
+          Style::default()
+            .with(StyleDeclaration::position(Position::Absolute))
+            .with_inset(Sides([Auto, Px(60.0), Px(60.0), Auto]))
+            .with(StyleDeclaration::display(Display::Flex)),
         ),
         children: Some(
           [ImageNode {
@@ -479,7 +624,7 @@ fn test_measure_svg_attr_size_in_absolute_flex_container_with_parent_padding() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -515,13 +660,11 @@ fn test_measure_svg_with_width_only_preserves_intrinsic_ratio() {
     preset: None,
     tw: None,
     style: Some(
-      StyleBuilder::default()
-        .width(Percentage(100.0))
-        .height(Percentage(100.0))
-        .display(Display::Flex)
-        .flex_direction(FlexDirection::Column)
-        .build()
-        .unwrap(),
+      Style::default()
+        .with(StyleDeclaration::width(Percentage(100.0)))
+        .with(StyleDeclaration::height(Percentage(100.0)))
+        .with(StyleDeclaration::display(Display::Flex))
+        .with(StyleDeclaration::flex_direction(FlexDirection::Column)),
     ),
     children: Some(
       [ImageNode {
@@ -530,7 +673,7 @@ fn test_measure_svg_with_width_only_preserves_intrinsic_ratio() {
         tag_name: Some("svg".into()),
         preset: None,
         tw: None,
-        style: Some(StyleBuilder::default().width(Px(96.0)).build().unwrap()),
+        style: Some(Style::default().with(StyleDeclaration::width(Px(96.0)))),
         src: svg.into(),
         width: None,
         height: None,
@@ -543,7 +686,7 @@ fn test_measure_svg_with_width_only_preserves_intrinsic_ratio() {
 
   let result = measure_layout(
     RenderOptionsBuilder::default()
-      .viewport(create_test_viewport())
+      .viewport(create_measure_viewport())
       .node(node)
       .global(&CONTEXT)
       .build()
@@ -600,25 +743,18 @@ fn test_measure_img_svg_attribute_sizing_cases() {
       preset: None,
       tw: None,
       style: Some(
-        StyleBuilder::default()
-          .width(Percentage(100.0))
-          .height(Percentage(100.0))
-          .display(Display::Flex)
-          .flex_direction(FlexDirection::Column)
-          .build()
-          .unwrap(),
+        Style::default()
+          .with(StyleDeclaration::width(Percentage(100.0)))
+          .with(StyleDeclaration::height(Percentage(100.0)))
+          .with(StyleDeclaration::display(Display::Flex))
+          .with(StyleDeclaration::flex_direction(FlexDirection::Column)),
       ),
       children: Some(
         [ImageNode {
           class_name: None,
           id: None,
           tag_name: Some("img".into()),
-          preset: Some(
-            StyleBuilder::default()
-              .display(Display::Inline)
-              .build()
-              .unwrap(),
-          ),
+          preset: Some(Style::default().with(StyleDeclaration::display(Display::Inline))),
           tw: None,
           style: None,
           src: svg.into(),
@@ -633,7 +769,7 @@ fn test_measure_img_svg_attribute_sizing_cases() {
 
     let result = measure_layout(
       RenderOptionsBuilder::default()
-        .viewport(create_test_viewport())
+        .viewport(create_measure_viewport())
         .node(node)
         .global(&CONTEXT)
         .build()

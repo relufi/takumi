@@ -10,9 +10,10 @@ use image::Rgba;
 
 use crate::{
   layout::style::{
-    CssToken, FromCss, MakeComputed, ParseResult, PercentageNumber, tw::TailwindPropertyParser,
+    Animatable, Color as CurrentColor, CssToken, FromCss, MakeComputed, ParseResult,
+    PercentageNumber, properties::gradient_utils::interpolate_rgba, tw::TailwindPropertyParser,
   },
-  rendering::fast_div_255,
+  rendering::{Sizing, fast_div_255},
 };
 
 fn is_cylindrical_color_space(color_space: ColorSpaceTag) -> bool {
@@ -123,6 +124,29 @@ pub enum ColorInput<const DEFAULT_CURRENT_COLOR: bool = true> {
 }
 
 impl<const DEFAULT_CURRENT_COLOR: bool> MakeComputed for ColorInput<DEFAULT_CURRENT_COLOR> {}
+
+impl<const DEFAULT_CURRENT_COLOR: bool> Animatable for ColorInput<DEFAULT_CURRENT_COLOR> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    _sizing: &Sizing,
+    current_color: CurrentColor,
+  ) {
+    *self = match (from, to) {
+      (ColorInput::Value(lhs), ColorInput::Value(rhs)) => {
+        ColorInput::Value(interpolate_rgba(*lhs, *rhs, progress))
+      }
+      (ColorInput::CurrentColor, ColorInput::CurrentColor) => ColorInput::CurrentColor,
+      _ => ColorInput::Value(interpolate_rgba(
+        from.resolve(current_color),
+        to.resolve(current_color),
+        progress,
+      )),
+    };
+  }
+}
 
 impl<const DEFAULT_CURRENT_COLOR: bool> Default for ColorInput<DEFAULT_CURRENT_COLOR> {
   fn default() -> Self {

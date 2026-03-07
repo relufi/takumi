@@ -3,6 +3,7 @@
 //! This module contains CSS-like properties including layout properties,
 //! typography settings, positioning, and visual effects.
 
+mod animation;
 mod aspect_ratio;
 mod background;
 mod background_image;
@@ -19,6 +20,7 @@ mod filter;
 mod flex;
 mod flex_grow;
 mod font_feature_settings;
+mod font_size;
 mod font_stretch;
 mod font_style;
 mod font_synthesis;
@@ -47,6 +49,7 @@ mod vertical_align;
 mod white_space;
 mod word_break;
 
+pub use animation::*;
 pub use aspect_ratio::*;
 pub use background::*;
 pub use background_image::*;
@@ -63,6 +66,7 @@ pub use filter::*;
 pub use flex::*;
 pub use flex_grow::*;
 pub use font_feature_settings::*;
+pub use font_size::*;
 pub use font_stretch::*;
 pub use font_style::*;
 pub use font_synthesis::*;
@@ -196,6 +200,23 @@ pub(crate) trait MakeComputed {
   fn make_computed(&mut self, _sizing: &Sizing) {}
 }
 
+pub(crate) trait Animatable: Sized + Clone {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    _sizing: &Sizing,
+    _current_color: Color,
+  ) {
+    *self = if progress >= 1.0 {
+      to.clone()
+    } else {
+      from.clone()
+    };
+  }
+}
+
 impl<T: MakeComputed> MakeComputed for Option<T> {
   fn make_computed(&mut self, sizing: &Sizing) {
     if let Some(value) = self.as_mut() {
@@ -216,6 +237,143 @@ impl<T: MakeComputed> MakeComputed for Vec<T> {
   fn make_computed(&mut self, sizing: &Sizing) {
     for value in self.iter_mut() {
       value.make_computed(sizing);
+    }
+  }
+}
+
+impl<T: Animatable + Clone> Animatable for Option<T> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    match (from, to) {
+      (Some(from), Some(to)) => {
+        let mut value = from.clone();
+        value.interpolate(from, to, progress, sizing, current_color);
+        *self = Some(value);
+      }
+      (Some(from), None) => {
+        *self = if progress >= 0.5 {
+          None
+        } else {
+          Some(from.clone())
+        };
+      }
+      (None, Some(to)) => {
+        *self = if progress >= 0.5 {
+          Some(to.clone())
+        } else {
+          None
+        };
+      }
+      (None, None) => {
+        *self = None;
+      }
+    }
+  }
+}
+
+impl<T: Animatable + Clone> Animatable for Box<[T]> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    if from.len() != to.len() {
+      *self = if progress >= 1.0 {
+        to.clone()
+      } else {
+        from.clone()
+      };
+      return;
+    }
+
+    let values = from
+      .into_iter()
+      .zip(to.iter())
+      .map(|(from_value, to_value)| {
+        let mut value = from_value.clone();
+        value.interpolate(from_value, to_value, progress, sizing, current_color);
+        value
+      })
+      .collect::<Vec<_>>()
+      .into_boxed_slice();
+    *self = values;
+  }
+}
+
+impl<T: Animatable + Clone> Animatable for Vec<T> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    if from.len() != to.len() {
+      *self = if progress >= 1.0 {
+        to.clone()
+      } else {
+        from.clone()
+      };
+      return;
+    }
+
+    *self = from
+      .iter()
+      .zip(to.iter())
+      .map(|(from_value, to_value)| {
+        let mut value = from_value.clone();
+        value.interpolate(from_value, to_value, progress, sizing, current_color);
+        value
+      })
+      .collect();
+  }
+}
+
+impl<T: Animatable + Copy, const Y_FIRST: bool> Animatable for SpacePair<T, Y_FIRST> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    self
+      .x
+      .interpolate(&from.x, &to.x, progress, sizing, current_color);
+    self
+      .y
+      .interpolate(&from.y, &to.y, progress, sizing, current_color);
+  }
+}
+
+impl<T: Animatable + Copy> Animatable for Sides<T> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    for (index, value) in self.0.iter_mut().enumerate() {
+      value.interpolate(
+        &from.0[index],
+        &to.0[index],
+        progress,
+        sizing,
+        current_color,
+      );
     }
   }
 }
@@ -383,9 +541,47 @@ impl TailwindPropertyParser for BackgroundClip {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BorderRadius(pub Sides<SpacePair<Length<false>>>);
 
+impl From<f32> for BorderRadius {
+  fn from(value: f32) -> Self {
+    Self(Sides(
+      [SpacePair::from_pair(Length::Px(value), Length::Px(value)); 4],
+    ))
+  }
+}
+
 impl MakeComputed for BorderRadius {
   fn make_computed(&mut self, sizing: &Sizing) {
     self.0.make_computed(sizing);
+  }
+}
+
+impl Animatable for BorderRadius {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    self
+      .0
+      .interpolate(&from.0, &to.0, progress, sizing, current_color);
+  }
+}
+
+impl Animatable for Box<BorderRadius> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    let mut value = **from;
+    value.interpolate(&**from, to.as_ref(), progress, sizing, current_color);
+    **self = value;
   }
 }
 

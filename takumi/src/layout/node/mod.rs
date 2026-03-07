@@ -16,7 +16,7 @@ use crate::{
   layout::{
     inline::InlineContentKind,
     style::{
-      Affine, BackgroundClip, BackgroundImage, BlendMode, CssValue, Length, Sides, Style,
+      Affine, BackgroundClip, BackgroundImage, BlendMode, Sides, Style, StyleDeclaration,
       tw::TailwindValues,
     },
   },
@@ -204,45 +204,21 @@ pub trait Node<N: Node<N>>: Send + Sync + Clone {
   /// Creates resolving tasks for style's http resources.
   fn collect_style_fetch_tasks(&self, collection: &mut FetchTaskCollection) {
     if let Some(style) = self.get_style() {
-      if let CssValue::Value(Some(images)) = &style.background_image {
-        collection.insert_many(images.iter().filter_map(|image| {
-          if let BackgroundImage::Url(url) = image {
-            Some(url.clone())
-          } else {
-            None
+      for declaration in style.iter() {
+        match declaration {
+          StyleDeclaration::BackgroundImage(Some(images))
+          | StyleDeclaration::MaskImage(Some(images)) => {
+            collection.insert_many(images.iter().filter_map(|image| {
+              if let BackgroundImage::Url(url) = image {
+                Some(url.clone())
+              } else {
+                None
+              }
+            }));
           }
-        }))
-      };
-
-      if let CssValue::Value(background) = &style.background {
-        collection.insert_many(background.iter().filter_map(|background| {
-          if let BackgroundImage::Url(url) = &background.image {
-            Some(url.clone())
-          } else {
-            None
-          }
-        }));
-      };
-
-      if let CssValue::Value(Some(images)) = &style.mask_image {
-        collection.insert_many(images.iter().filter_map(|image| {
-          if let BackgroundImage::Url(url) = image {
-            Some(url.clone())
-          } else {
-            None
-          }
-        }));
-      };
-
-      if let CssValue::Value(mask) = &style.mask {
-        collection.insert_many(mask.iter().filter_map(|background| {
-          if let BackgroundImage::Url(url) = &background.image {
-            Some(url.clone())
-          } else {
-            None
-          }
-        }));
-      };
+          _ => {}
+        }
+      }
     };
 
     let Some(children) = self.children_ref() else {
@@ -517,27 +493,18 @@ pub trait Node<N: Node<N>>: Send + Sync + Clone {
     let width = context
       .style
       .outline_width
-      .unwrap_or(context.style.outline.width)
       .to_px(&context.sizing, layout.size.width)
       .max(0.0);
 
     let offset = context
       .style
       .outline_offset
-      .unwrap_or(Length::zero())
       .to_px(&context.sizing, layout.size.width);
 
     let mut border = BorderProperties {
       width: Sides([width; 4]).into(),
-      color: context
-        .style
-        .outline_color
-        .unwrap_or(context.style.outline.color)
-        .resolve(context.current_color),
-      style: context
-        .style
-        .outline_style
-        .unwrap_or(context.style.outline.style),
+      color: context.style.outline_color.resolve(context.current_color),
+      style: context.style.outline_style,
       image_rendering: context.style.image_rendering,
       radius: BorderProperties::resolve_radius_part(context, layout.size),
     };
@@ -585,6 +552,7 @@ impl_node_enum!(
 
 #[cfg(test)]
 mod tests {
+  use crate::layout::style::{BackgroundImage, Style, StyleDeclaration};
 
   use super::*;
 
@@ -595,12 +563,11 @@ mod tests {
       children: Some(
         [ContainerNode {
           children: None,
-          style: Some(Style {
-            background_image: CssValue::Value(Some(
+          style: Some(
+            Style::default().with(StyleDeclaration::background_image(Some(
               [BackgroundImage::Url(background_url.into())].into(),
-            )),
-            ..Default::default()
-          }),
+            ))),
+          ),
           tag_name: None,
           class_name: None,
           id: None,

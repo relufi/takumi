@@ -3,7 +3,8 @@ use taffy::{Point, Size};
 
 use crate::{
   layout::style::{
-    CssToken, FromCss, Length, MakeComputed, ParseResult, SpacePair, tw::TailwindPropertyParser,
+    Animatable, Color, CssToken, FromCss, Length, MakeComputed, ParseResult, SpacePair,
+    tw::TailwindPropertyParser,
   },
   rendering::Sizing,
 };
@@ -49,6 +50,27 @@ impl MakeComputed for PositionComponent {
   }
 }
 
+impl Animatable for PositionComponent {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    let mut length = Length::from(*from);
+    length.interpolate(
+      &Length::from(*from),
+      &Length::from(*to),
+      progress,
+      sizing,
+      current_color,
+    );
+    *self = PositionComponent::Length(length);
+  }
+}
+
 impl From<Length> for PositionComponent {
   fn from(value: Length) -> Self {
     PositionComponent::Length(value)
@@ -73,17 +95,39 @@ impl From<PositionComponent> for Length {
   }
 }
 
-/// Parsed `background-position` value for one layer.
+/// Parsed position value for one layer-like CSS property.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BackgroundPosition(pub SpacePair<PositionComponent>);
+pub struct BackgroundPosition<const DEFAULT_TOP_LEFT: bool = true>(
+  pub SpacePair<PositionComponent>,
+);
 
-impl MakeComputed for BackgroundPosition {
+/// `object-position` value with a CSS initial value of `center center`.
+pub type ObjectPosition = BackgroundPosition<false>;
+/// `transform-origin` value with a CSS initial value of `center center`.
+pub type TransformOrigin = BackgroundPosition<false>;
+
+impl<const DEFAULT_TOP_LEFT: bool> MakeComputed for BackgroundPosition<DEFAULT_TOP_LEFT> {
   fn make_computed(&mut self, sizing: &Sizing) {
     self.0.make_computed(sizing);
   }
 }
 
-impl BackgroundPosition {
+impl<const DEFAULT_TOP_LEFT: bool> Animatable for BackgroundPosition<DEFAULT_TOP_LEFT> {
+  fn interpolate(
+    &mut self,
+    from: &Self,
+    to: &Self,
+    progress: f32,
+    sizing: &Sizing,
+    current_color: Color,
+  ) {
+    let mut value = from.0;
+    value.interpolate(&from.0, &to.0, progress, sizing, current_color);
+    self.0 = value;
+  }
+}
+
+impl<const DEFAULT_TOP_LEFT: bool> BackgroundPosition<DEFAULT_TOP_LEFT> {
   pub(crate) fn to_point(self, sizing: &Sizing, border_box: Size<f32>) -> Point<f32> {
     Point {
       x: Length::from(self.0.x).to_px(sizing, border_box.width),
@@ -92,7 +136,7 @@ impl BackgroundPosition {
   }
 }
 
-impl TailwindPropertyParser for BackgroundPosition {
+impl<const DEFAULT_TOP_LEFT: bool> TailwindPropertyParser for BackgroundPosition<DEFAULT_TOP_LEFT> {
   fn parse_tw(token: &str) -> Option<Self> {
     match token {
       "top-left" => Some(Self(SpacePair::from_pair(
@@ -136,16 +180,23 @@ impl TailwindPropertyParser for BackgroundPosition {
   }
 }
 
-impl Default for BackgroundPosition {
+impl<const DEFAULT_TOP_LEFT: bool> Default for BackgroundPosition<DEFAULT_TOP_LEFT> {
   fn default() -> Self {
-    Self(SpacePair::from_pair(
-      PositionComponent::KeywordX(PositionKeywordX::Center),
-      PositionComponent::KeywordY(PositionKeywordY::Center),
-    ))
+    if DEFAULT_TOP_LEFT {
+      Self(SpacePair::from_pair(
+        PositionComponent::KeywordX(PositionKeywordX::Left),
+        PositionComponent::KeywordY(PositionKeywordY::Top),
+      ))
+    } else {
+      Self(SpacePair::from_pair(
+        PositionComponent::KeywordX(PositionKeywordX::Center),
+        PositionComponent::KeywordY(PositionKeywordY::Center),
+      ))
+    }
   }
 }
 
-impl<'i> FromCss<'i> for BackgroundPosition {
+impl<'i, const DEFAULT_TOP_LEFT: bool> FromCss<'i> for BackgroundPosition<DEFAULT_TOP_LEFT> {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
     let first = PositionComponent::from_css(input)?;
     // If a second exists, parse it; otherwise, 1-value syntax means y=center
@@ -219,6 +270,6 @@ impl<'i> FromCss<'i> for BackgroundPositions {
   }
 
   fn valid_tokens() -> &'static [CssToken] {
-    BackgroundPosition::valid_tokens()
+    BackgroundPosition::<true>::valid_tokens()
   }
 }

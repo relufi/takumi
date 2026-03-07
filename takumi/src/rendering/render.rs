@@ -24,8 +24,9 @@ use crate::{
     tree::{LayoutResults, LayoutTree, RenderNode},
   },
   rendering::{
-    BorderProperties, Canvas, CanvasConstrain, CanvasConstrainResult, RenderContext, Sizing,
-    draw_debug_border, inline_drawing::get_parent_x_height, overlay_image,
+    AnimationFrame, BorderProperties, Canvas, CanvasConstrain, CanvasConstrainResult,
+    RenderContext, RenderTime, Sizing, draw_debug_border, inline_drawing::get_parent_x_height,
+    overlay_image,
   },
   resources::image::ImageSource,
 };
@@ -49,6 +50,19 @@ pub struct RenderOptions<'g, N: Node<N>> {
   /// CSS stylesheets to apply before layout/rendering.
   #[builder(default)]
   pub(crate) stylesheets: Vec<String>,
+  /// Global animation time in milliseconds.
+  #[builder(default)]
+  pub(crate) time_ms: u64,
+}
+
+#[derive(Clone, Builder)]
+#[builder(pattern = "owned")]
+/// A single scene in a sequential animation timeline.
+pub struct SequentialScene<'g, N: Node<N>> {
+  /// Render options used when this scene is active.
+  pub(crate) options: RenderOptions<'g, N>,
+  /// Duration of this scene in milliseconds.
+  pub(crate) duration_ms: u32,
 }
 
 /// Information about a text run in an inline layout.
@@ -120,10 +134,19 @@ pub fn measure_layout<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<M
     options.viewport,
     options.fetched_resources,
     parsed_stylesheets,
+    RenderTime {
+      time_ms: options.time_ms,
+    },
   );
   #[cfg(not(feature = "css_stylesheet_parsing"))]
-  let mut render_context =
-    RenderContext::new(options.global, options.viewport, options.fetched_resources);
+  let mut render_context = RenderContext::new(
+    options.global,
+    options.viewport,
+    options.fetched_resources,
+    RenderTime {
+      time_ms: options.time_ms,
+    },
+  );
   render_context.draw_debug_border = options.draw_debug_border;
   let mut root = RenderNode::from_node(&render_context, options.node);
   let mut tree = LayoutTree::from_render_node(&root);
@@ -364,9 +387,19 @@ pub fn render<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<RgbaImage
     viewport,
     options.fetched_resources,
     parsed_stylesheets,
+    RenderTime {
+      time_ms: options.time_ms,
+    },
   );
   #[cfg(not(feature = "css_stylesheet_parsing"))]
-  let mut render_context = RenderContext::new(options.global, viewport, options.fetched_resources);
+  let mut render_context = RenderContext::new(
+    options.global,
+    viewport,
+    options.fetched_resources,
+    RenderTime {
+      time_ms: options.time_ms,
+    },
+  );
   render_context.draw_debug_border = options.draw_debug_border;
 
   let mut root = RenderNode::from_node(&render_context, options.node);
@@ -408,25 +441,109 @@ pub fn render<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<RgbaImage
   Ok(canvas.into_inner())
 }
 
+/// Renders a node at a specific time on the global animation timeline.
+pub fn render_at_time<'g, N: Node<N>>(
+  mut options: RenderOptions<'g, N>,
+  time_ms: u64,
+) -> Result<RgbaImage> {
+  options.time_ms = time_ms;
+  render(options)
+}
+
+/// Renders the active scene for a sequential animation timeline at `time_ms`.
+pub fn render_sequence_at_time<'g, N: Node<N>>(
+  scenes: &[SequentialScene<'g, N>],
+  time_ms: u64,
+) -> Result<RgbaImage> {
+  let Some((scene, local_time_ms)) = resolve_scene_at_time(scenes, time_ms) else {
+    return Err(Error::InvalidViewport);
+  };
+
+  render_at_time(scene.options.clone(), local_time_ms)
+}
+
+/// Renders all frames for a sequential animation timeline at a fixed frame rate.
+pub fn render_sequence_animation<'g, N: Node<N>>(
+  scenes: &[SequentialScene<'g, N>],
+  fps: u32,
+) -> Result<Vec<AnimationFrame>> {
+  if scenes.is_empty() || fps == 0 {
+    return Ok(Vec::new());
+  }
+
+  let total_duration_ms = total_sequence_duration(scenes);
+  if total_duration_ms == 0 {
+    return Ok(Vec::new());
+  }
+
+  let frame_count = total_duration_ms
+    .saturating_mul(u64::from(fps))
+    .div_ceil(1000);
+  let mut frames = Vec::with_capacity(frame_count as usize);
+
+  for frame_index in 0..frame_count {
+    let start_ms = frame_index * 1000 / u64::from(fps);
+    let end_ms = ((frame_index + 1) * 1000 / u64::from(fps)).min(total_duration_ms);
+    let frame_duration_ms = end_ms.saturating_sub(start_ms);
+    if frame_duration_ms == 0 {
+      continue;
+    }
+
+    let image = render_sequence_at_time(scenes, start_ms)?;
+    frames.push(AnimationFrame::new(image, frame_duration_ms as u32));
+  }
+
+  Ok(frames)
+}
+
+fn total_sequence_duration<'g, N: Node<N>>(scenes: &[SequentialScene<'g, N>]) -> u64 {
+  scenes
+    .iter()
+    .map(|scene| u64::from(scene.duration_ms))
+    .sum::<u64>()
+}
+
+fn resolve_scene_at_time<'a, 'g, N: Node<N>>(
+  scenes: &'a [SequentialScene<'g, N>],
+  time_ms: u64,
+) -> Option<(&'a SequentialScene<'g, N>, u64)> {
+  if scenes.is_empty() {
+    return None;
+  }
+
+  let mut elapsed_ms = 0_u64;
+  let clamped_time_ms = time_ms.min(total_sequence_duration(scenes).saturating_sub(1));
+
+  for scene in scenes {
+    let next_elapsed_ms = elapsed_ms + u64::from(scene.duration_ms);
+    if clamped_time_ms < next_elapsed_ms {
+      return Some((scene, clamped_time_ms - elapsed_ms));
+    }
+    elapsed_ms = next_elapsed_ms;
+  }
+
+  scenes
+    .last()
+    .map(|scene| (scene, u64::from(scene.duration_ms.saturating_sub(1))))
+}
+
 fn apply_transform(
   transform: &mut Affine,
   style: &ResolvedStyle,
   border_box: Size<f32>,
   sizing: &Sizing,
 ) {
-  let transform_origin = style.transform_origin.unwrap_or_default();
-  let origin = transform_origin.to_point(sizing, border_box);
+  let origin = style.transform_origin.to_point(sizing, border_box);
 
   // CSS Transforms Level 2 order: T(origin) * translate * rotate * scale * transform * T(-origin)
   // Ref: https://www.w3.org/TR/css-transforms-2/#ctm
 
   let mut local = Affine::translation(origin.x, origin.y);
 
-  let translate = style.translate();
-  if translate != SpacePair::default() {
+  if style.translate != SpacePair::default() {
     local *= Affine::translation(
-      translate.x.to_px(sizing, border_box.width),
-      translate.y.to_px(sizing, border_box.height),
+      style.translate.x.to_px(sizing, border_box.width),
+      style.translate.y.to_px(sizing, border_box.height),
     );
   }
 
@@ -434,9 +551,8 @@ fn apply_transform(
     local *= Affine::rotation(rotate);
   }
 
-  let scale = style.scale();
-  if scale != SpacePair::default() {
-    local *= Affine::scale(scale.x.0, scale.y.0);
+  if style.scale != SpacePair::default() {
+    local *= Affine::scale(style.scale.x.0, style.scale.y.0);
   }
 
   if let Some(node_transform) = &style.transform {
@@ -678,4 +794,113 @@ pub(crate) fn render_node<'g, Nodes: Node<Nodes>>(
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{
+    RenderOptionsBuilder, SequentialScene, SequentialSceneBuilder, render_sequence_animation,
+    resolve_scene_at_time,
+  };
+  use crate::{
+    GlobalContext,
+    layout::{
+      Viewport,
+      node::{ContainerNode, NodeKind},
+    },
+  };
+
+  fn make_scene<'g>(global: &'g GlobalContext, duration_ms: u32) -> SequentialScene<'g, NodeKind> {
+    let options_result = RenderOptionsBuilder::default()
+      .global(global)
+      .viewport(Viewport::new(Some(10), Some(10)))
+      .node(NodeKind::Container(ContainerNode::default()))
+      .build();
+    assert!(options_result.is_ok());
+    let Ok(options) = options_result else {
+      unreachable!()
+    };
+
+    let scene_result = SequentialSceneBuilder::default()
+      .duration_ms(duration_ms)
+      .options(options)
+      .build();
+    assert!(scene_result.is_ok());
+    let Ok(scene) = scene_result else {
+      unreachable!()
+    };
+    scene
+  }
+
+  #[test]
+  fn resolve_scene_at_time_uses_cumulative_durations() {
+    let global = GlobalContext::default();
+    let scenes = vec![make_scene(&global, 100), make_scene(&global, 200)];
+
+    let scene = resolve_scene_at_time(&scenes, 50);
+    assert!(scene.is_some());
+    let Some((_, local_time)) = scene else {
+      unreachable!()
+    };
+    assert_eq!(local_time, 50);
+
+    let scene = resolve_scene_at_time(&scenes, 150);
+    assert!(scene.is_some());
+    let Some((_, local_time)) = scene else {
+      unreachable!()
+    };
+    assert_eq!(local_time, 50);
+  }
+
+  #[test]
+  fn resolve_scene_at_time_clamps_to_last_scene() {
+    let global = GlobalContext::default();
+    let scenes = vec![make_scene(&global, 100), make_scene(&global, 200)];
+
+    let scene = resolve_scene_at_time(&scenes, 500);
+    assert!(scene.is_some());
+    let Some((_, local_time)) = scene else {
+      unreachable!()
+    };
+    assert_eq!(local_time, 199);
+  }
+
+  #[test]
+  fn render_sequence_animation_returns_no_frames_for_zero_duration_timelines() {
+    let global = GlobalContext::default();
+    let scenes = vec![make_scene(&global, 0)];
+
+    let frames_result = render_sequence_animation(&scenes, 30);
+    assert!(frames_result.is_ok());
+    let Ok(frames) = frames_result else {
+      unreachable!()
+    };
+
+    assert!(frames.is_empty());
+  }
+
+  #[test]
+  fn render_sequence_animation_uses_per_frame_integer_durations() {
+    let global = GlobalContext::default();
+    let scenes = vec![make_scene(&global, 150)];
+
+    let frames_result = render_sequence_animation(&scenes, 30);
+    assert!(frames_result.is_ok());
+    let Ok(frames) = frames_result else {
+      unreachable!()
+    };
+    let durations = frames
+      .iter()
+      .map(|frame| frame.duration_ms)
+      .collect::<Vec<_>>();
+
+    assert_eq!(durations, vec![33, 33, 34, 33, 17]);
+    assert_eq!(
+      durations
+        .iter()
+        .map(|duration| u64::from(*duration))
+        .sum::<u64>(),
+      150
+    );
+  }
 }

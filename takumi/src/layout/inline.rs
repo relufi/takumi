@@ -183,7 +183,7 @@ pub(crate) fn create_inline_layout<'c, 'g: 'c, N: Node<N> + 'c>(
           let span_style = context.style.to_sized_font_style(context);
           let transformed = apply_text_transform(&text, context.style.text_transform);
           let collapsed =
-            apply_white_space_collapse(&transformed, style.parent.white_space_collapse());
+            apply_white_space_collapse(&transformed, style.parent.white_space_collapse);
 
           builder.push_style_span((&span_style).into());
           builder.push_text(&collapsed);
@@ -203,18 +203,27 @@ pub(crate) fn create_inline_layout<'c, 'g: 'c, N: Node<N> + 'c>(
             context.sizing.font_size,
             context.style.line_height,
           );
-          let margin = context
-            .style
-            .resolved_margin()
-            .map(|length| length.to_px(&context.sizing, 0.0));
-          let padding = context
-            .style
-            .resolved_padding()
-            .map(|length| length.to_px(&context.sizing, 0.0));
-          let border = context
-            .style
-            .resolved_border_width()
-            .map(|length| length.to_px(&context.sizing, 0.0));
+          let margin = Rect {
+            top: context.style.margin_top,
+            right: context.style.margin_right,
+            bottom: context.style.margin_bottom,
+            left: context.style.margin_left,
+          }
+          .map(|length| length.to_px(&context.sizing, 0.0));
+          let padding = Rect {
+            top: context.style.padding_top,
+            right: context.style.padding_right,
+            bottom: context.style.padding_bottom,
+            left: context.style.padding_left,
+          }
+          .map(|length| length.to_px(&context.sizing, 0.0));
+          let border = Rect {
+            top: context.style.border_top_width,
+            right: context.style.border_right_width,
+            bottom: context.style.border_bottom_width,
+            left: context.style.border_left_width,
+          }
+          .map(|length| length.to_px(&context.sizing, 0.0));
 
           let content_size = if render_node.is_inline_atomic_container() {
             render_node.measure_atomic_subtree(available_space)
@@ -290,13 +299,9 @@ pub(crate) fn create_inline_layout<'c, 'g: 'c, N: Node<N> + 'c>(
     }
   }
 
-  let text_wrap_style = style
-    .parent
-    .text_wrap_style
-    .unwrap_or(style.parent.text_wrap.style);
   let line_count = layout.lines().count();
 
-  if text_wrap_style == TextWrapStyle::Balance {
+  if style.parent.text_wrap_style == TextWrapStyle::Balance {
     make_balanced_text(
       &mut layout,
       &text,
@@ -307,7 +312,7 @@ pub(crate) fn create_inline_layout<'c, 'g: 'c, N: Node<N> + 'c>(
     );
   }
 
-  if text_wrap_style == TextWrapStyle::Pretty {
+  if style.parent.text_wrap_style == TextWrapStyle::Pretty {
     make_pretty_text(&mut layout, max_width, max_height);
   }
 

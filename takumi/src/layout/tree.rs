@@ -22,7 +22,7 @@ use crate::{
     node::{Node, NodeStyleLayers},
     style::{
       Affine, BlendMode, Color, Display, Filters, Isolation, PercentageNumber, ResolvedStyle,
-      Style as NodeStyle,
+      Style as NodeStyle, apply_stylesheet_animations,
     },
   },
   rendering::{
@@ -88,12 +88,11 @@ pub(crate) struct RenderNode<'g, N: Node<N>> {
   pub(crate) force_inline_layout: bool,
 }
 
-fn build_inherited_style(
-  parent_style: &ResolvedStyle,
+fn build_style_layers(
   node_layers: NodeStyleLayers,
   #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &MatchedDeclarations,
   viewport: Viewport,
-) -> ResolvedStyle {
+) -> NodeStyle {
   let mut style = NodeStyle::default();
 
   if let Some(preset) = node_layers.preset {
@@ -106,7 +105,7 @@ fn build_inherited_style(
   }
 
   if let Some(author_tw) = node_layers.author_tw {
-    author_tw.apply_to_style(&mut style, viewport);
+    style.append_block(author_tw.into_declaration_block(viewport));
   }
 
   if let Some(inline) = node_layers.inline {
@@ -118,7 +117,23 @@ fn build_inherited_style(
     declaration.merge_into(&mut style);
   }
 
-  style.inherit(parent_style)
+  style
+}
+
+#[cfg(test)]
+fn build_inherited_style(
+  parent_style: &ResolvedStyle,
+  node_layers: NodeStyleLayers,
+  #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &MatchedDeclarations,
+  viewport: Viewport,
+) -> ResolvedStyle {
+  build_style_layers(
+    node_layers,
+    #[cfg(feature = "css_stylesheet_parsing")]
+    matched_declarations,
+    viewport,
+  )
+  .inherit(parent_style)
 }
 
 fn push_layout_node<'r, 'g, N: Node<N>>(
@@ -601,20 +616,14 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
     context.style.mix_blend_mode = BlendMode::Normal;
     context.style.isolation = Isolation::Auto;
     context.style.clip_path = None;
-    context.style.mask = Default::default();
     context.style.mask_image = None;
-    context.style.mask_size = None;
-    context.style.mask_position = None;
-    context.style.mask_repeat = None;
+    context.style.mask_size = Default::default();
+    context.style.mask_position = Default::default();
+    context.style.mask_repeat = Default::default();
     context.style.transform = None;
-    context.style.transform_origin = None;
     context.style.rotate = None;
-    context.style.scale = None;
-    context.style.scale_x = None;
-    context.style.scale_y = None;
-    context.style.translate = None;
-    context.style.translate_x = None;
-    context.style.translate_y = None;
+    context.style.scale = Default::default();
+    context.style.translate = Default::default();
     context
   }
 
@@ -815,6 +824,7 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
         transform: parent_context.transform,
         style: Box::new(style),
         current_color,
+        time: parent_context.time,
         draw_debug_border: parent_context.draw_debug_border,
         fetched_resources: parent_context.fetched_resources.clone(),
         sizing,
@@ -829,21 +839,43 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
       node_index: usize,
       #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &[MatchedDeclarations],
     ) -> (ResolvedStyle, Sizing, Color) {
+      #[cfg(feature = "css_stylesheet_parsing")]
+      let default_matched = MatchedDeclarations::default();
+      #[cfg(feature = "css_stylesheet_parsing")]
+      let matched = matched_declarations
+        .get(node_index)
+        .unwrap_or(&default_matched);
       let layers = node.take_style_layers();
-      let mut style = build_inherited_style(
-        &parent_context.style,
+      let style_layers = build_style_layers(
         layers,
         #[cfg(feature = "css_stylesheet_parsing")]
-        matched_declarations
-          .get(node_index)
-          .unwrap_or(&MatchedDeclarations::default()),
+        matched,
         parent_context.sizing.viewport,
       );
+      let mut style = style_layers.inherit(&parent_context.style);
 
       let font_size = style
         .font_size
-        .map(|font_size| font_size.to_px(&parent_context.sizing, parent_context.sizing.font_size))
-        .unwrap_or(parent_context.sizing.font_size);
+        .to_px(&parent_context.sizing, parent_context.sizing.font_size);
+      let child_sizing = Sizing {
+        font_size,
+        ..parent_context.sizing.clone()
+      };
+      let child_current_color = style.color.resolve(parent_context.current_color);
+      let child_context = build_render_context(
+        parent_context,
+        style.clone(),
+        child_sizing.clone(),
+        child_current_color,
+      );
+      style = apply_stylesheet_animations(style, &child_context);
+
+      #[cfg(feature = "css_stylesheet_parsing")]
+      for declaration in matched.important.iter() {
+        declaration.apply_to_resolved(&mut style);
+      }
+
+      let font_size = style.font_size.to_px(&child_sizing, child_sizing.font_size);
       let sizing = Sizing {
         font_size,
         ..parent_context.sizing.clone()
@@ -1147,38 +1179,32 @@ mod tests {
   use super::build_inherited_style;
   #[cfg(feature = "css_stylesheet_parsing")]
   use crate::layout::style::{
-    DeclarationMetadata, PropertyId, StyleDeclaration, StyleDeclarationValue,
-    matching::MatchedDeclarations,
+    LonghandId, StyleDeclaration, StyleDeclarationBlock, matching::MatchedDeclarations,
   };
   use crate::layout::{
     Viewport,
     node::NodeStyleLayers,
-    style::{CssValue, Length, ResolvedStyle, Style},
+    style::{Length, ResolvedStyle, Style},
   };
 
   #[test]
   fn stylesheet_important_overrides_inline_normal() {
     let parent = ResolvedStyle::default();
     let layers = NodeStyleLayers {
-      inline: Some(Style {
-        width: CssValue::Value(Length::Px(20.0)),
-        ..Default::default()
-      }),
+      inline: Some(Style::default().with(StyleDeclaration::width(Length::Px(20.0)))),
       ..Default::default()
     };
 
     #[cfg(feature = "css_stylesheet_parsing")]
     let matched = MatchedDeclarations {
-      normal: smallvec![StyleDeclaration {
-        metadata: Default::default(),
-        property: PropertyId::width,
-        value: StyleDeclarationValue::width(Length::Px(20.0)),
-      }],
-      important: smallvec![StyleDeclaration {
-        metadata: DeclarationMetadata { important: true },
-        property: PropertyId::width,
-        value: StyleDeclarationValue::width(Length::Px(30.0)),
-      }],
+      normal: StyleDeclarationBlock {
+        declarations: smallvec![StyleDeclaration::width(Length::Px(20.0))],
+        importance_set: Default::default(),
+      },
+      important: StyleDeclarationBlock {
+        declarations: smallvec![StyleDeclaration::width(Length::Px(30.0))],
+        importance_set: [LonghandId::Width].into_iter().collect(),
+      },
     };
 
     let resolved = build_inherited_style(

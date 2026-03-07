@@ -9,6 +9,7 @@
   clippy::must_use_candidate
 )]
 
+mod encode_frames_task;
 mod helper;
 mod load_font_task;
 mod measure_task;

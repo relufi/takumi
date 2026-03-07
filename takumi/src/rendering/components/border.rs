@@ -48,12 +48,22 @@ impl BorderProperties {
     context: &RenderContext,
     border_box: Size<f32>,
   ) -> Sides<SpacePair<f32>> {
-    let resolved = context.style.resolved_border_radius();
-
-    let top_left = resolved.top.to_px(&context.sizing, border_box);
-    let top_right = resolved.right.to_px(&context.sizing, border_box);
-    let bottom_right = resolved.bottom.to_px(&context.sizing, border_box);
-    let bottom_left = resolved.left.to_px(&context.sizing, border_box);
+    let top_left = context
+      .style
+      .border_top_left_radius
+      .to_px(&context.sizing, border_box);
+    let top_right = context
+      .style
+      .border_top_right_radius
+      .to_px(&context.sizing, border_box);
+    let bottom_right = context
+      .style
+      .border_bottom_right_radius
+      .to_px(&context.sizing, border_box);
+    let bottom_left = context
+      .style
+      .border_bottom_left_radius
+      .to_px(&context.sizing, border_box);
 
     Sides([top_left, top_right, bottom_right, bottom_left])
   }
@@ -66,16 +76,9 @@ impl BorderProperties {
   ) -> Self {
     Self {
       width: border_width,
-      color: context
-        .style
-        .border_color
-        .unwrap_or(context.style.border.color)
-        .resolve(context.current_color),
+      color: context.style.border_color.resolve(context.current_color),
       radius: Self::resolve_radius_part(context, border_box),
-      style: context
-        .style
-        .border_style
-        .unwrap_or(context.style.border.style),
+      style: context.style.border_style,
       image_rendering: context.style.image_rendering,
     }
   }
