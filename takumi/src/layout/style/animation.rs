@@ -14,9 +14,9 @@ use crate::{
 
 #[cfg(feature = "css_stylesheet_parsing")]
 pub(crate) fn apply_stylesheet_animations(
-  mut base_style: ResolvedStyle,
+  mut base_style: ComputedStyle,
   context: &RenderContext<'_>,
-) -> ResolvedStyle {
+) -> ComputedStyle {
   if base_style.animation_name.0.is_empty() {
     return base_style;
   }
@@ -77,9 +77,9 @@ pub(crate) fn apply_stylesheet_animations(
 
 #[cfg(not(feature = "css_stylesheet_parsing"))]
 pub(crate) fn apply_stylesheet_animations(
-  base_style: ResolvedStyle,
+  base_style: ComputedStyle,
   _context: &crate::rendering::RenderContext<'_>,
-) -> ResolvedStyle {
+) -> ComputedStyle {
   base_style
 }
 
@@ -197,7 +197,7 @@ fn apply_direction(progress: f32, direction: AnimationDirection, iteration_index
 #[cfg(feature = "css_stylesheet_parsing")]
 fn sample_keyframe_segment<'a>(
   resolved_frames: &'a ResolvedKeyframes,
-  base_style: &'a ResolvedStyle,
+  base_style: &'a ComputedStyle,
   progress: f32,
 ) -> Option<InterpolationSegment<'a>> {
   let first = resolved_frames.points.first()?;
@@ -254,7 +254,7 @@ fn sample_keyframe_segment<'a>(
 }
 
 #[cfg(feature = "css_stylesheet_parsing")]
-fn resolve_keyframes(keyframes: &KeyframesRule, base_style: &ResolvedStyle) -> ResolvedKeyframes {
+fn resolve_keyframes(keyframes: &KeyframesRule, base_style: &ComputedStyle) -> ResolvedKeyframes {
   let mut points = keyframes
     .keyframes
     .iter()
@@ -311,13 +311,13 @@ fn resolve_keyframes(keyframes: &KeyframesRule, base_style: &ResolvedStyle) -> R
 #[cfg(feature = "css_stylesheet_parsing")]
 #[derive(Debug)]
 struct ResolvedKeyframeStyle {
-  style: ResolvedStyle,
+  style: ComputedStyle,
   mask: PropertyMask,
 }
 
 #[cfg(feature = "css_stylesheet_parsing")]
 impl ResolvedKeyframeStyle {
-  fn new(style: ResolvedStyle, mask: PropertyMask) -> Self {
+  fn new(style: ComputedStyle, mask: PropertyMask) -> Self {
     Self { style, mask }
   }
 }
@@ -346,8 +346,8 @@ impl ResolvedKeyframes {
 #[cfg(feature = "css_stylesheet_parsing")]
 #[derive(Debug)]
 struct InterpolationSegment<'a> {
-  from_style: &'a ResolvedStyle,
-  to_style: &'a ResolvedStyle,
+  from_style: &'a ComputedStyle,
+  to_style: &'a ComputedStyle,
   animated_properties: PropertyMask,
   progress: f32,
 }
@@ -355,9 +355,9 @@ struct InterpolationSegment<'a> {
 #[cfg(feature = "css_stylesheet_parsing")]
 impl<'a> InterpolationSegment<'a> {
   fn new(
-    from_style: &'a ResolvedStyle,
+    from_style: &'a ComputedStyle,
     from_mask: Option<&'a PropertyMask>,
-    to_style: &'a ResolvedStyle,
+    to_style: &'a ComputedStyle,
     to_mask: Option<&'a PropertyMask>,
     progress: f32,
   ) -> Self {
@@ -380,7 +380,7 @@ impl<'a> InterpolationSegment<'a> {
 #[cfg(feature = "css_stylesheet_parsing")]
 fn resolve_keyframe_style(
   keyframe: &KeyframeRule,
-  base_style: &ResolvedStyle,
+  base_style: &ComputedStyle,
 ) -> ResolvedKeyframeStyle {
   let mut style = base_style.clone();
   let mut mask = PropertyMask::new();
@@ -395,12 +395,12 @@ fn merge_keyframe_style(style: &mut ResolvedKeyframeStyle, keyframe: &KeyframeRu
 
 #[cfg(feature = "css_stylesheet_parsing")]
 fn apply_keyframe_declarations(
-  style: &mut ResolvedStyle,
+  style: &mut ComputedStyle,
   mask: &mut PropertyMask,
   keyframe: &KeyframeRule,
 ) {
   for declaration in keyframe.declarations.iter() {
-    declaration.apply_to_resolved_ref(style);
+    declaration.apply_to_computed(style);
     mask.insert(declaration.longhand_id());
   }
 }
@@ -787,20 +787,20 @@ mod tests {
 
   #[test]
   fn apply_interpolated_properties_only_updates_masked_fields() {
-    let mut base_style = ResolvedStyle {
+    let mut base_style = ComputedStyle {
       width: Length::Px(10.0),
       height: Length::Px(20.0),
-      ..ResolvedStyle::default()
+      ..ComputedStyle::default()
     };
-    let from = ResolvedStyle {
+    let from = ComputedStyle {
       width: Length::Px(10.0),
       height: Length::Px(100.0),
-      ..ResolvedStyle::default()
+      ..ComputedStyle::default()
     };
-    let to = ResolvedStyle {
+    let to = ComputedStyle {
       width: Length::Px(30.0),
       height: Length::Px(200.0),
-      ..ResolvedStyle::default()
+      ..ComputedStyle::default()
     };
     let animated_properties = BTreeSet::from([LonghandId::Width]);
 

@@ -18,7 +18,7 @@ use crate::{
     },
     node::Node,
     style::{
-      Affine, Filter, ImageScalingAlgorithm, ResolvedStyle, SpacePair, apply_backdrop_filter,
+      Affine, ComputedStyle, Filter, ImageScalingAlgorithm, SpacePair, apply_backdrop_filter,
       apply_filters,
     },
     tree::{LayoutResults, LayoutTree, RenderNode},
@@ -529,7 +529,7 @@ fn resolve_scene_at_time<'a, 'g, N: Node<N>>(
 
 fn apply_transform(
   transform: &mut Affine,
-  style: &ResolvedStyle,
+  style: &ComputedStyle,
   border_box: Size<f32>,
   sizing: &Sizing,
 ) {

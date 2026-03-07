@@ -11,6 +11,13 @@ use super::{GridRepeatTrack, GridRepetitionCount, GridTrackSize};
 /// preserving JSON compatibility (serialized as a plain array) and clean TS types.
 pub type GridTemplateComponents = Vec<GridTemplateComponent>;
 
+pub(crate) trait GridTemplateComponentsExt {
+  fn collect_components_and_names(
+    &self,
+    sizing: &Sizing,
+  ) -> (Vec<taffy::GridTemplateComponent<String>>, Vec<Vec<String>>);
+}
+
 /// Represents a track sizing function or a list of line names between tracks
 #[derive(Debug, Clone, PartialEq)]
 pub enum GridTemplateComponent {
@@ -137,6 +144,63 @@ impl<'i> FromCss<'i> for GridTemplateComponents {
 
   fn valid_tokens() -> &'static [CssToken] {
     GridTemplateComponent::valid_tokens()
+  }
+}
+
+impl GridTemplateComponentsExt for [GridTemplateComponent] {
+  fn collect_components_and_names(
+    &self,
+    sizing: &Sizing,
+  ) -> (Vec<taffy::GridTemplateComponent<String>>, Vec<Vec<String>>) {
+    let mut track_components = Vec::new();
+    let mut line_name_sets = Vec::new();
+    let mut pending_line_names = Vec::new();
+
+    for component in self {
+      match component {
+        GridTemplateComponent::LineNames(names) => {
+          if !names.is_empty() {
+            pending_line_names.extend_from_slice(names);
+          }
+        }
+        GridTemplateComponent::Single(track_size) => {
+          line_name_sets.push(std::mem::take(&mut pending_line_names));
+          track_components.push(taffy::GridTemplateComponent::Single(
+            track_size.to_min_max(sizing),
+          ));
+        }
+        GridTemplateComponent::Repeat(repetition, tracks) => {
+          line_name_sets.push(std::mem::take(&mut pending_line_names));
+
+          let track_sizes = tracks
+            .iter()
+            .map(|track| track.size.to_min_max(sizing))
+            .collect();
+          let mut inner_line_names = tracks
+            .iter()
+            .map(|track| track.names.to_owned())
+            .collect::<Vec<_>>();
+          inner_line_names.push(
+            tracks
+              .last()
+              .and_then(|track| track.end_names.clone())
+              .unwrap_or_default(),
+          );
+
+          track_components.push(taffy::GridTemplateComponent::Repeat(
+            taffy::GridTemplateRepetition {
+              count: (*repetition).into(),
+              tracks: track_sizes,
+              line_names: inner_line_names,
+            },
+          ));
+        }
+      }
+    }
+
+    line_name_sets.push(pending_line_names);
+
+    (track_components, line_name_sets)
   }
 }
 

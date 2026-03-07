@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::BTreeSet, marker::PhantomData};
 
+use cssparser::{Parser, Token, match_ignore_ascii_case};
 use parley::{FontSettings, FontStack, TextStyle};
 use paste::paste;
 use serde::de::IgnoredAny;
@@ -28,16 +29,21 @@ enum ParsedRawStyleValue<T> {
   Value(T),
 }
 
-fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
-  if value.eq_ignore_ascii_case("initial") {
-    Some(CssWideKeyword::Initial)
-  } else if value.eq_ignore_ascii_case("inherit") {
-    Some(CssWideKeyword::Inherit)
-  } else if value.eq_ignore_ascii_case("unset") {
-    Some(CssWideKeyword::Unset)
-  } else {
-    None
+fn parse_raw_typed_value<'de, T, E>(
+  source: &'de str,
+  invalid_input_error: impl FnOnce() -> E,
+) -> Result<ParsedRawStyleValue<T>, E>
+where
+  T: for<'i> FromCss<'i>,
+  E: serde::de::Error,
+{
+  if let Ok(keyword) = CssWideKeyword::from_str(source) {
+    return Ok(ParsedRawStyleValue::Keyword(keyword));
   }
+
+  T::from_str(source)
+    .map(ParsedRawStyleValue::Value)
+    .map_err(|_| invalid_input_error())
 }
 
 fn parse_raw_style_value<'de, T, E>(
@@ -48,25 +54,17 @@ where
   E: serde::de::Error,
 {
   match raw_value {
-    RawCssInput::Str(value) => {
-      if let Some(keyword) = parse_css_wide_keyword(value.as_ref()) {
-        return Ok(ParsedRawStyleValue::Keyword(keyword));
-      }
-
-      T::from_str(value.as_ref())
-        .map(ParsedRawStyleValue::Value)
-        .map_err(|_| {
-          E::invalid_value(
-            serde::de::Unexpected::Str(value.as_ref()),
-            &super::css_expected_message::<T>(),
-          )
-        })
-    }
+    RawCssInput::Str(value) => parse_raw_typed_value(value.as_ref(), || {
+      E::invalid_value(
+        serde::de::Unexpected::Str(value.as_ref()),
+        &super::css_expected_message::<T>(),
+      )
+    }),
     RawCssInput::Number(number) => {
       let source = number.to_string();
-      T::from_str(&source)
-        .map(ParsedRawStyleValue::Value)
-        .map_err(|_| E::invalid_type(number.unexpected(), &super::css_expected_message::<T>()))
+      parse_raw_typed_value(&source, || {
+        E::invalid_type(number.unexpected(), &super::css_expected_message::<T>())
+      })
     }
     RawCssInput::Unexpected(unexpected) => {
       unexpected.as_invalid_type::<T, E, ParsedRawStyleValue<T>>()
@@ -74,12 +72,128 @@ where
   }
 }
 
+fn parse_longhand_declaration<'i, T>(
+  input: &mut Parser<'i, '_>,
+  longhand_id: LonghandId,
+  to_declaration: impl FnOnce(T) -> StyleDeclaration,
+) -> ParseResult<'i, StyleDeclaration>
+where
+  T: for<'t> FromCss<'t>,
+{
+  let state = input.state();
+  let keyword = input.try_parse(CssWideKeyword::from_css).ok();
+
+  if let Some(keyword) = keyword {
+    Ok(StyleDeclaration::CssWideKeyword(longhand_id, keyword))
+  } else {
+    input.reset(&state);
+    Ok(to_declaration(T::from_css(input)?))
+  }
+}
+
+fn parse_raw_longhand_declaration<'de, T, E>(
+  longhand_id: LonghandId,
+  raw_value: RawCssInput<'de>,
+  to_declaration: impl FnOnce(T) -> StyleDeclaration,
+) -> Result<StyleDeclaration, E>
+where
+  T: for<'t> FromCss<'t>,
+  E: serde::de::Error,
+{
+  match parse_raw_style_value::<T, E>(raw_value)? {
+    ParsedRawStyleValue::Keyword(keyword) => {
+      Ok(StyleDeclaration::CssWideKeyword(longhand_id, keyword))
+    }
+    ParsedRawStyleValue::Value(value) => Ok(to_declaration(value)),
+  }
+}
+
+fn expand_shorthand<T>(
+  value: T,
+  expand: impl FnOnce(T, &mut Vec<StyleDeclaration>),
+) -> Vec<StyleDeclaration> {
+  let mut declarations = Vec::new();
+  expand(value, &mut declarations);
+  declarations
+}
+
+fn normalize_kebab_property_name(name: &str) -> Option<String> {
+  if name.starts_with("--") {
+    return None;
+  }
+
+  Some(
+    name
+      .chars()
+      .map(|ch| match ch {
+        '-' => '_',
+        _ => ch.to_ascii_lowercase(),
+      })
+      .collect(),
+  )
+}
+
+fn normalize_camel_property_name(name: &str) -> String {
+  let mut normalized = String::with_capacity(name.len() + 4);
+  for ch in name.chars() {
+    if ch.is_ascii_uppercase() {
+      normalized.push('_');
+      normalized.push(ch.to_ascii_lowercase());
+    } else {
+      normalized.push(ch);
+    }
+  }
+
+  normalized.trim_start_matches('_').to_owned()
+}
+
+fn property_alias(name: &str) -> Option<PropertyId> {
+  match name {
+    "-webkit-text-stroke" | "textStroke" | "WebkitTextStroke" => {
+      Some(PropertyId::Shorthand(ShorthandId::WebkitTextStroke))
+    }
+    "-webkit-text-stroke-width" | "textStrokeWidth" | "WebkitTextStrokeWidth" => {
+      Some(PropertyId::Longhand(LonghandId::WebkitTextStrokeWidth))
+    }
+    "-webkit-text-stroke-color" | "textStrokeColor" | "WebkitTextStrokeColor" => {
+      Some(PropertyId::Longhand(LonghandId::WebkitTextStrokeColor))
+    }
+    "-webkit-text-fill-color" | "textFillColor" | "WebkitTextFillColor" => {
+      Some(PropertyId::Longhand(LonghandId::WebkitTextFillColor))
+    }
+    _ => None,
+  }
+}
+
 macro_rules! push_expanded_declarations {
-  ($target:expr, $important:expr; $($declaration:expr),+ $(,)?) => {{
-    let _ = $important;
+  ($target:expr; $($declaration:expr),+ $(,)?) => {{
     $(
       $target.push($declaration);
     )+
+  }};
+}
+
+macro_rules! push_axis_declarations {
+  ($target:expr, $value:expr, $first:ident, $second:ident) => {{
+    let value = $value;
+    push_expanded_declarations!(
+      $target;
+      StyleDeclaration::$first(value.x),
+      StyleDeclaration::$second(value.y),
+    );
+  }};
+}
+
+macro_rules! push_four_side_declarations {
+  ($target:expr, $values:expr, $top:ident, $right:ident, $bottom:ident, $left:ident) => {{
+    let values = $values;
+    push_expanded_declarations!(
+      $target;
+      StyleDeclaration::$top(values[0]),
+      StyleDeclaration::$right(values[1]),
+      StyleDeclaration::$bottom(values[2]),
+      StyleDeclaration::$left(values[3]),
+    );
   }};
 }
 
@@ -96,7 +210,7 @@ macro_rules! define_style {
         $shorthand:ident: $shorthand_ty:ty
           $(where inherit = $shorthand_inherit:expr)?
           => [$($target:ident),+ $(,)?]
-          |$value:ident, $target_var:ident, $important_var:ident|
+          |$value:ident, $target_var:ident|
           $expand:block,
       )*
     }
@@ -119,96 +233,75 @@ macro_rules! define_style {
         Shorthand(ShorthandId),
       }
 
-      impl LonghandId {
-        fn from_normalized_name(name: &str) -> Option<Self> {
-          match name {
-            $(stringify!($longhand) => Some(Self::[<$longhand:camel>]),)*
-            _ => None,
-          }
-        }
-      }
-
-      impl ShorthandId {
-        fn from_normalized_name(name: &str) -> Option<Self> {
-          match name {
-            $(stringify!($shorthand) => Some(Self::[<$shorthand:camel>]),)*
-            _ => None,
-          }
-        }
-      }
-
       impl PropertyId {
-        fn from_alias(name: &str) -> Option<Self> {
-          match name {
-            "-webkit-text-stroke" => Some(Self::Shorthand(ShorthandId::WebkitTextStroke)),
-            "-webkit-text-stroke-width" => {
-              Some(Self::Longhand(LonghandId::WebkitTextStrokeWidth))
-            }
-            "-webkit-text-stroke-color" => {
-              Some(Self::Longhand(LonghandId::WebkitTextStrokeColor))
-            }
-            "-webkit-text-fill-color" => Some(Self::Longhand(LonghandId::WebkitTextFillColor)),
-            _ => None,
-          }
-        }
-
         fn from_normalized_name(name: &str) -> Self {
-          if let Some(property) = LonghandId::from_normalized_name(name) {
-            return Self::Longhand(property);
+          match name {
+            $(stringify!($longhand) => Self::Longhand(LonghandId::[<$longhand:camel>]),)*
+            $(stringify!($shorthand) => Self::Shorthand(ShorthandId::[<$shorthand:camel>]),)*
+            _ => Self::Ignored,
           }
-          if let Some(property) = ShorthandId::from_normalized_name(name) {
-            return Self::Shorthand(property);
-          }
-          Self::Ignored
         }
 
         fn from_kebab_case(name: &str) -> Self {
-          if name.starts_with("--") {
-            return Self::Ignored;
-          }
-          if let Some(property) = Self::from_alias(name) {
+          if let Some(property) = property_alias(name) {
             return property;
           }
 
-          let normalized = name
-            .chars()
-            .map(|ch| match ch {
-              '-' => '_',
-              _ => ch.to_ascii_lowercase(),
-            })
-            .collect::<String>();
-          Self::from_normalized_name(&normalized)
+          normalize_kebab_property_name(name)
+            .map_or(Self::Ignored, |normalized| Self::from_normalized_name(&normalized))
         }
 
         #[allow(dead_code)]
         pub(crate) fn from_camel_case(name: &str) -> Self {
-          match name {
-            "textStroke" | "WebkitTextStroke" => {
-              return Self::Shorthand(ShorthandId::WebkitTextStroke);
-            }
-            "textStrokeWidth" | "WebkitTextStrokeWidth" => {
-              return Self::Longhand(LonghandId::WebkitTextStrokeWidth);
-            }
-            "textStrokeColor" | "WebkitTextStrokeColor" => {
-              return Self::Longhand(LonghandId::WebkitTextStrokeColor);
-            }
-            "textFillColor" | "WebkitTextFillColor" => {
-              return Self::Longhand(LonghandId::WebkitTextFillColor);
-            }
-            _ => {}
+          if let Some(property) = property_alias(name) {
+            return property;
           }
 
-          let mut normalized = String::with_capacity(name.len() + 4);
-          for ch in name.chars() {
-            if ch.is_ascii_uppercase() {
-              normalized.push('_');
-              normalized.push(ch.to_ascii_lowercase());
-            } else {
-              normalized.push(ch);
-            }
-          }
+          Self::from_normalized_name(&normalize_camel_property_name(name))
+        }
 
-          Self::from_normalized_name(normalized.trim_start_matches('_'))
+        fn parse_declarations<'i>(
+          self,
+          input: &mut cssparser::Parser<'i, '_>,
+        ) -> Result<Vec<StyleDeclaration>, cssparser::ParseError<'i, Cow<'i, str>>> {
+          match self {
+            Self::Ignored => {
+              while input.next_including_whitespace_and_comments().is_ok() {}
+              Ok(Vec::new())
+            }
+            Self::Shorthand(property) => parse_shorthand_declarations(property, input),
+            Self::Longhand(property) => match property {
+              $(
+                LonghandId::[<$longhand:camel>] => Ok(vec![parse_longhand_declaration::<$longhand_ty>(
+                  input,
+                  LonghandId::[<$longhand:camel>],
+                  StyleDeclaration::[<$longhand:camel>],
+                )?]),
+              )*
+            },
+          }
+        }
+
+        fn parse_raw_declarations<'de, E>(
+          self,
+          raw_value: RawCssInput<'de>,
+        ) -> Result<Vec<StyleDeclaration>, E>
+        where
+          E: serde::de::Error,
+        {
+          match self {
+            Self::Ignored => Ok(Vec::new()),
+            Self::Shorthand(property) => parse_shorthand_declarations_from_raw(property, raw_value),
+            Self::Longhand(property) => match property {
+              $(
+                LonghandId::[<$longhand:camel>] => Ok(vec![parse_raw_longhand_declaration::<$longhand_ty, E>(
+                  LonghandId::[<$longhand:camel>],
+                  raw_value,
+                  StyleDeclaration::[<$longhand:camel>],
+                )?]),
+              )*
+            },
+          }
         }
       }
 
@@ -216,45 +309,10 @@ macro_rules! define_style {
         name: &str,
         input: &mut cssparser::Parser<'i, '_>,
       ) -> Result<StyleDeclarationBlock, cssparser::ParseError<'i, Cow<'i, str>>> {
-        let property = PropertyId::from_kebab_case(name);
-        let mut declarations = StyleDeclarationBlock::default();
-
-        match property {
-          PropertyId::Ignored => {
-            while input.next_including_whitespace_and_comments().is_ok() {}
-            Ok(declarations)
-          }
-          PropertyId::Shorthand(property) => {
-            for declaration in parse_shorthand_declarations(property, input)? {
-              declarations.push(declaration, false);
-            }
-            Ok(declarations)
-          }
-          PropertyId::Longhand(property) => match property {
-            $(
-              LonghandId::[<$longhand:camel>] => {
-                let state = input.state();
-                let keyword = input
-                  .try_parse(cssparser::Parser::expect_ident_cloned)
-                  .ok()
-                  .and_then(|ident| parse_css_wide_keyword(ident.as_ref()));
-                if let Some(keyword) = keyword {
-                  declarations.push(
-                    StyleDeclaration::CssWideKeyword(LonghandId::[<$longhand:camel>], keyword),
-                    false,
-                  );
-                } else {
-                  input.reset(&state);
-                  declarations.push(
-                    StyleDeclaration::[<$longhand:camel>](<$longhand_ty as FromCss>::from_css(input)?),
-                    false,
-                  );
-                }
-                Ok(declarations)
-              }
-            )*
-          },
-        }
+        Ok(StyleDeclarationBlock::from_declarations(
+          PropertyId::from_kebab_case(name).parse_declarations(input)?,
+          false,
+        ))
       }
 
       /// Defines the style of an element.
@@ -303,42 +361,43 @@ macro_rules! define_style {
       }
 
       impl Style {
-        fn with_importance(mut self, declaration: StyleDeclaration, important: bool) -> Self {
-          self.push(declaration, important);
-          self
+        fn push_declarations(
+          &mut self,
+          declarations: impl IntoIterator<Item = StyleDeclaration>,
+          important: bool,
+        ) {
+          self.declarations.push_declarations(declarations, important);
         }
 
-        fn with_shorthand_importance(
+        fn with_declarations(
           mut self,
-          declarations: Vec<StyleDeclaration>,
+          declarations: impl IntoIterator<Item = StyleDeclaration>,
           important: bool,
         ) -> Self {
-          for declaration in declarations {
-            self.push(declaration, important);
-          }
+          self.push_declarations(declarations, important);
           self
         }
 
         /// Returns a new style with one declaration appended in source order.
         pub fn with(self, declaration: StyleDeclaration) -> Self {
-          self.with_importance(declaration, false)
+          self.with_declarations([declaration], false)
         }
 
         $(
           /// Returns a new style with this shorthand expanded and appended in source order.
           pub fn [<with_ $shorthand>](self, value: $shorthand_ty) -> Self {
-            let mut declarations = Vec::new();
-            let $target_var = &mut declarations;
-            let $important_var = false;
-            let $value = value;
-            $expand
-            self.with_shorthand_importance(declarations, false)
+            self.with_declarations(
+              expand_shorthand(value, |$value, $target_var| {
+                $expand
+              }),
+              false,
+            )
           }
         )*
 
         /// Returns a new style with one `!important` declaration appended in source order.
         pub fn with_important(self, declaration: StyleDeclaration) -> Self {
-          self.with_importance(declaration, true)
+          self.with_declarations([declaration], true)
         }
 
         pub(crate) fn push(&mut self, declaration: StyleDeclaration, important: bool) {
@@ -353,10 +412,10 @@ macro_rules! define_style {
           self.declarations.iter()
         }
 
-        pub(crate) fn inherit(self, parent: &ResolvedStyle) -> ResolvedStyle {
-          let mut style = ResolvedStyle::from_parent(parent);
+        pub(crate) fn inherit(self, parent: &ComputedStyle) -> ComputedStyle {
+          let mut style = ComputedStyle::from_parent(parent);
           for declaration in self.declarations.declarations {
-            declaration.apply_to_computed_with_parent(&mut style, parent);
+            declaration.apply_with_parent(&mut style, parent);
           }
           style
         }
@@ -375,33 +434,8 @@ macro_rules! define_style {
         where
           E: serde::de::Error,
         {
-          match property {
-            PropertyId::Ignored => Ok(()),
-            PropertyId::Shorthand(property) => {
-              for declaration in parse_shorthand_declarations_from_raw(property, raw_value)? {
-                self.push(declaration, important);
-              }
-              Ok(())
-            }
-            PropertyId::Longhand(property) => match property {
-              $(
-                LonghandId::[<$longhand:camel>] => {
-                  match parse_raw_style_value::<$longhand_ty, E>(raw_value)? {
-                    ParsedRawStyleValue::Keyword(keyword) => {
-                      self.push(
-                        StyleDeclaration::CssWideKeyword(LonghandId::[<$longhand:camel>], keyword),
-                        important,
-                      );
-                    }
-                    ParsedRawStyleValue::Value(value) => {
-                      self.push(StyleDeclaration::[<$longhand:camel>](value), important);
-                    }
-                  }
-                  Ok(())
-                }
-              )*
-            },
-          }
+          self.push_declarations(property.parse_raw_declarations(raw_value)?, important);
+          Ok(())
         }
       }
 
@@ -411,7 +445,7 @@ macro_rules! define_style {
         }
       }
 
-      /// A resolved set of style properties.
+      /// The computed style snapshot used during layout and rendering.
       #[derive(Clone, Debug, Default)]
       pub struct ComputedStyle {
         $(pub(crate) $longhand: $longhand_ty,)*
@@ -480,7 +514,7 @@ macro_rules! define_style {
         }
 
         #[inline(never)]
-        pub(crate) fn apply_to_computed_with_parent(
+        pub(crate) fn apply_with_parent(
           self,
           style: &mut ComputedStyle,
           parent: &ComputedStyle,
@@ -494,7 +528,7 @@ macro_rules! define_style {
         }
 
         #[inline(never)]
-        pub(crate) fn apply_to_resolved_ref(&self, style: &mut ComputedStyle) {
+        pub(crate) fn apply_to_computed(&self, style: &mut ComputedStyle) {
           match self {
             Self::CssWideKeyword(property, keyword) => match keyword {
               CssWideKeyword::Initial => apply_initial_longhand(style, *property),
@@ -547,12 +581,9 @@ macro_rules! define_style {
         match property {
           $(
             ShorthandId::[<$shorthand:camel>] => {
-              let mut declarations = Vec::new();
-              let $target_var = &mut declarations;
-              let $important_var = false;
-              let $value = <$shorthand_ty as FromCss>::from_css(input)?;
-              $expand
-              Ok(declarations)
+              Ok(expand_shorthand(<$shorthand_ty as FromCss>::from_css(input)?, |$value, $target_var| {
+                $expand
+              }))
             }
           )*
         }
@@ -574,14 +605,9 @@ macro_rules! define_style {
                     $(StyleDeclaration::CssWideKeyword(LonghandId::$target, keyword)),+
                   ])
                 }
-                ParsedRawStyleValue::Value(value) => {
-                  let mut declarations = Vec::new();
-                  let $target_var = &mut declarations;
-                  let $important_var = false;
-                  let $value = value;
+                ParsedRawStyleValue::Value(value) => Ok(expand_shorthand(value, |$value, $target_var| {
                   $expand
-                  Ok(declarations)
-                }
+                })),
               }
             }
           )*
@@ -723,258 +749,237 @@ define_style! {
     vertical_align: VerticalAlign,
   }
   shorthands {
-    animation: Animations => [AnimationName, AnimationDuration, AnimationDelay, AnimationTimingFunction, AnimationIterationCount, AnimationDirection, AnimationFillMode, AnimationPlayState] |value, target, important| {
-      let has_animation_name = value.iter().any(|animation| animation.name.is_some());
-      push_expanded_declarations!(
+    animation: Animations => [AnimationName, AnimationDuration, AnimationDelay, AnimationTimingFunction, AnimationIterationCount, AnimationDirection, AnimationFillMode, AnimationPlayState] |value, target| {
+      expand_animation_shorthand(value, target);
+    },
+    padding: Sides<Length<false>> => [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft] |value, target| {
+      push_four_side_declarations!(
         target,
-        important;
-        StyleDeclaration::animation_duration(AnimationDurations(value.iter().map(|animation| animation.duration).collect())),
-        StyleDeclaration::animation_delay(AnimationDurations(value.iter().map(|animation| animation.delay).collect())),
-        StyleDeclaration::animation_timing_function(AnimationTimingFunctions(value.iter().map(|animation| animation.timing_function).collect())),
-        StyleDeclaration::animation_iteration_count(AnimationIterationCounts(value.iter().map(|animation| animation.iteration_count).collect())),
-        StyleDeclaration::animation_direction(AnimationDirections(value.iter().map(|animation| animation.direction).collect())),
-        StyleDeclaration::animation_fill_mode(AnimationFillModes(value.iter().map(|animation| animation.fill_mode).collect())),
-        StyleDeclaration::animation_play_state(AnimationPlayStates(value.iter().map(|animation| animation.play_state).collect())),
-        StyleDeclaration::animation_name(if has_animation_name {
-          AnimationNames(value.into_iter().map(|animation| animation.name.unwrap_or_default()).collect())
-        } else {
-          AnimationNames::default()
-        }),
+        value.0,
+        padding_top,
+        padding_right,
+        padding_bottom,
+        padding_left
       );
     },
-    padding: Sides<Length<false>> => [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft] |value, target, important| {
-      let values = value.0;
-      push_expanded_declarations!(
+    padding_inline: SpacePair<Length<false>> => [PaddingLeft, PaddingRight] |value, target| {
+      push_axis_declarations!(target, value, padding_left, padding_right);
+    },
+    padding_block: SpacePair<Length<false>> => [PaddingTop, PaddingBottom] |value, target| {
+      push_axis_declarations!(target, value, padding_top, padding_bottom);
+    },
+    margin: Sides<Length<false>> => [MarginTop, MarginRight, MarginBottom, MarginLeft] |value, target| {
+      push_four_side_declarations!(
         target,
-        important;
-        StyleDeclaration::padding_top(values[0]),
-        StyleDeclaration::padding_right(values[1]),
-        StyleDeclaration::padding_bottom(values[2]),
-        StyleDeclaration::padding_left(values[3]),
+        value.0,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left
       );
     },
-    padding_inline: SpacePair<Length<false>> => [PaddingLeft, PaddingRight] |value, target, important| {
-      push_expanded_declarations!(
+    margin_inline: SpacePair<Length<false>> => [MarginLeft, MarginRight] |value, target| {
+      push_axis_declarations!(target, value, margin_left, margin_right);
+    },
+    margin_block: SpacePair<Length<false>> => [MarginTop, MarginBottom] |value, target| {
+      push_axis_declarations!(target, value, margin_top, margin_bottom);
+    },
+    inset: Sides<Length> => [Top, Right, Bottom, Left] |value, target| {
+      push_four_side_declarations!(target, value.0, top, right, bottom, left);
+    },
+    inset_inline: SpacePair<Length> => [Left, Right] |value, target| {
+      push_axis_declarations!(target, value, left, right);
+    },
+    inset_block: SpacePair<Length> => [Top, Bottom] |value, target| {
+      push_axis_declarations!(target, value, top, bottom);
+    },
+    mask: Backgrounds => [MaskImage, MaskPosition, MaskSize, MaskRepeat] |value, target| {
+      expand_mask_shorthand(value, target);
+    },
+    gap: Gap => [RowGap, ColumnGap] |value, target| {
+      push_axis_declarations!(target, value, row_gap, column_gap);
+    },
+    flex: Option<Flex> => [FlexGrow, FlexShrink, FlexBasis] |value, target| {
+      expand_flex_shorthand(value, target);
+    },
+    border_radius: Box<BorderRadius> => [BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius, BorderBottomLeftRadius] |value, target| {
+      push_four_side_declarations!(
         target,
-        important;
-        StyleDeclaration::padding_left(value.x),
-        StyleDeclaration::padding_right(value.y),
+        value.0.0,
+        border_top_left_radius,
+        border_top_right_radius,
+        border_bottom_right_radius,
+        border_bottom_left_radius
       );
     },
-    padding_block: SpacePair<Length<false>> => [PaddingTop, PaddingBottom] |value, target, important| {
-      push_expanded_declarations!(
+    border_width: Sides<Length> => [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth] |value, target| {
+      push_four_side_declarations!(
         target,
-        important;
-        StyleDeclaration::padding_top(value.x),
-        StyleDeclaration::padding_bottom(value.y),
+        value.0,
+        border_top_width,
+        border_right_width,
+        border_bottom_width,
+        border_left_width
       );
     },
-    margin: Sides<Length<false>> => [MarginTop, MarginRight, MarginBottom, MarginLeft] |value, target, important| {
-      let values = value.0;
-      push_expanded_declarations!(
+    border_inline_width: Option<SpacePair<Length>> => [BorderLeftWidth, BorderRightWidth] |value, target| {
+      push_axis_declarations!(
         target,
-        important;
-        StyleDeclaration::margin_top(values[0]),
-        StyleDeclaration::margin_right(values[1]),
-        StyleDeclaration::margin_bottom(values[2]),
-        StyleDeclaration::margin_left(values[3]),
+        value.unwrap_or_default(),
+        border_left_width,
+        border_right_width
       );
     },
-    margin_inline: SpacePair<Length<false>> => [MarginLeft, MarginRight] |value, target, important| {
-      push_expanded_declarations!(
+    border_block_width: Option<SpacePair<Length>> => [BorderTopWidth, BorderBottomWidth] |value, target| {
+      push_axis_declarations!(
         target,
-        important;
-        StyleDeclaration::margin_left(value.x),
-        StyleDeclaration::margin_right(value.y),
+        value.unwrap_or_default(),
+        border_top_width,
+        border_bottom_width
       );
     },
-    margin_block: SpacePair<Length<false>> => [MarginTop, MarginBottom] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::margin_top(value.x),
-        StyleDeclaration::margin_bottom(value.y),
-      );
+    border: Border => [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth, BorderStyle, BorderColor] |value, target| {
+      expand_border_shorthand(value, target);
     },
-    inset: Sides<Length> => [Top, Right, Bottom, Left] |value, target, important| {
-      let values = value.0;
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::top(values[0]),
-        StyleDeclaration::right(values[1]),
-        StyleDeclaration::bottom(values[2]),
-        StyleDeclaration::left(values[3]),
-      );
+    outline: Border => [OutlineWidth, OutlineStyle, OutlineColor] |value, target| {
+      expand_outline_shorthand(value, target);
     },
-    inset_inline: SpacePair<Length> => [Left, Right] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::left(value.x),
-        StyleDeclaration::right(value.y),
-      );
+    overflow: SpacePair<Overflow> => [OverflowX, OverflowY] |value, target| {
+      push_axis_declarations!(target, value, overflow_x, overflow_y);
     },
-    inset_block: SpacePair<Length> => [Top, Bottom] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::top(value.x),
-        StyleDeclaration::bottom(value.y),
-      );
+    background: Backgrounds => [BackgroundImage, BackgroundPosition, BackgroundSize, BackgroundRepeat, BackgroundBlendMode, BackgroundColor, BackgroundClip] |value, target| {
+      expand_background_shorthand(value, target);
     },
-    mask: Backgrounds => [MaskImage, MaskPosition, MaskSize, MaskRepeat] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::mask_position(value.iter().map(|background| background.position).collect()),
-        StyleDeclaration::mask_size(value.iter().map(|background| background.size).collect()),
-        StyleDeclaration::mask_repeat(value.iter().map(|background| background.repeat).collect()),
-        StyleDeclaration::mask_image(Some(value.into_iter().map(|background| background.image).collect())),
-      );
+    font_synthesis: FontSynthesis where inherit = true => [FontSynthesisWeight, FontSynthesisStyle] |value, target| {
+      expand_font_synthesis_shorthand(value, target);
     },
-    gap: Gap => [RowGap, ColumnGap] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::row_gap(value.x),
-        StyleDeclaration::column_gap(value.y),
-      );
+    webkit_text_stroke: Option<TextStroke> where inherit = true => [WebkitTextStrokeWidth, WebkitTextStrokeColor] |value, target| {
+      expand_text_stroke_shorthand(value, target);
     },
-    flex: Option<Flex> => [FlexGrow, FlexShrink, FlexBasis] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::flex_grow(value.map(|value| FlexGrow(value.grow))),
-        StyleDeclaration::flex_shrink(value.map(|value| FlexGrow(value.shrink))),
-        StyleDeclaration::flex_basis(value.map(|value| value.basis)),
-      );
+    text_decoration: TextDecoration => [TextDecorationLine, TextDecorationStyle, TextDecorationColor, TextDecorationThickness] |value, target| {
+      expand_text_decoration_shorthand(value, target);
     },
-    border_radius: Box<BorderRadius> => [BorderTopLeftRadius, BorderTopRightRadius, BorderBottomRightRadius, BorderBottomLeftRadius] |value, target, important| {
-      let values = value.0.0;
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::border_top_left_radius(values[0]),
-        StyleDeclaration::border_top_right_radius(values[1]),
-        StyleDeclaration::border_bottom_right_radius(values[2]),
-        StyleDeclaration::border_bottom_left_radius(values[3]),
-      );
+    white_space: WhiteSpace where inherit = true => [TextWrapMode, WhiteSpaceCollapse] |value, target| {
+      expand_white_space_shorthand(value, target);
     },
-    border_width: Sides<Length> => [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth] |value, target, important| {
-      let values = value.0;
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::border_top_width(values[0]),
-        StyleDeclaration::border_right_width(values[1]),
-        StyleDeclaration::border_bottom_width(values[2]),
-        StyleDeclaration::border_left_width(values[3]),
-      );
-    },
-    border_inline_width: Option<SpacePair<Length>> => [BorderLeftWidth, BorderRightWidth] |value, target, important| {
-      let value = value.unwrap_or_default();
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::border_left_width(value.x),
-        StyleDeclaration::border_right_width(value.y),
-      );
-    },
-    border_block_width: Option<SpacePair<Length>> => [BorderTopWidth, BorderBottomWidth] |value, target, important| {
-      let value = value.unwrap_or_default();
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::border_top_width(value.x),
-        StyleDeclaration::border_bottom_width(value.y),
-      );
-    },
-    border: Border => [BorderTopWidth, BorderRightWidth, BorderBottomWidth, BorderLeftWidth, BorderStyle, BorderColor] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::border_top_width(value.width),
-        StyleDeclaration::border_right_width(value.width),
-        StyleDeclaration::border_bottom_width(value.width),
-        StyleDeclaration::border_left_width(value.width),
-        StyleDeclaration::border_style(value.style),
-        StyleDeclaration::border_color(value.color),
-      );
-    },
-    outline: Border => [OutlineWidth, OutlineStyle, OutlineColor] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::outline_width(value.width),
-        StyleDeclaration::outline_style(value.style),
-        StyleDeclaration::outline_color(value.color),
-      );
-    },
-    overflow: SpacePair<Overflow> => [OverflowX, OverflowY] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::overflow_x(value.x),
-        StyleDeclaration::overflow_y(value.y),
-      );
-    },
-    background: Backgrounds => [BackgroundImage, BackgroundPosition, BackgroundSize, BackgroundRepeat, BackgroundBlendMode, BackgroundColor, BackgroundClip] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::background_position(value.iter().map(|background| background.position).collect()),
-        StyleDeclaration::background_size(value.iter().map(|background| background.size).collect()),
-        StyleDeclaration::background_repeat(value.iter().map(|background| background.repeat).collect()),
-        StyleDeclaration::background_blend_mode(value.iter().map(|background| background.blend_mode).collect()),
-        StyleDeclaration::background_color(value.iter().filter_map(|background| background.color).next_back().unwrap_or_default()),
-        StyleDeclaration::background_clip(value.last().map(|background| background.clip).unwrap_or_default()),
-        StyleDeclaration::background_image(Some(value.into_iter().map(|background| background.image).collect())),
-      );
-    },
-    font_synthesis: FontSynthesis where inherit = true => [FontSynthesisWeight, FontSynthesisStyle] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::font_synthesis_weight(value.weight),
-        StyleDeclaration::font_synthesis_style(value.style),
-      );
-    },
-    webkit_text_stroke: Option<TextStroke> where inherit = true => [WebkitTextStrokeWidth, WebkitTextStrokeColor] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::webkit_text_stroke_width(value.map(|value| value.width)),
-        StyleDeclaration::webkit_text_stroke_color(value.and_then(|value| value.color)),
-      );
-    },
-    text_decoration: TextDecoration => [TextDecorationLine, TextDecorationStyle, TextDecorationColor, TextDecorationThickness] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::text_decoration_line(Some(value.line)),
-        StyleDeclaration::text_decoration_style(value.style.unwrap_or_default()),
-        StyleDeclaration::text_decoration_color(value.color.unwrap_or_default()),
-        StyleDeclaration::text_decoration_thickness(value.thickness.unwrap_or_default()),
-      );
-    },
-    white_space: WhiteSpace where inherit = true => [TextWrapMode, WhiteSpaceCollapse] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::text_wrap_mode(value.text_wrap_mode),
-        StyleDeclaration::white_space_collapse(value.white_space_collapse),
-      );
-    },
-    text_wrap: TextWrap where inherit = true => [TextWrapMode, TextWrapStyle] |value, target, important| {
-      push_expanded_declarations!(
-        target,
-        important;
-        StyleDeclaration::text_wrap_mode(value.mode.unwrap_or_default()),
-        StyleDeclaration::text_wrap_style(value.style),
-      );
+    text_wrap: TextWrap where inherit = true => [TextWrapMode, TextWrapStyle] |value, target| {
+      expand_text_wrap_shorthand(value, target);
     },
   }
+}
+
+fn expand_animation_shorthand(value: Animations, target: &mut Vec<StyleDeclaration>) {
+  let has_animation_name = value.iter().any(|animation| animation.name.is_some());
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::animation_duration(AnimationDurations(value.iter().map(|animation| animation.duration).collect())),
+    StyleDeclaration::animation_delay(AnimationDurations(value.iter().map(|animation| animation.delay).collect())),
+    StyleDeclaration::animation_timing_function(AnimationTimingFunctions(value.iter().map(|animation| animation.timing_function).collect())),
+    StyleDeclaration::animation_iteration_count(AnimationIterationCounts(value.iter().map(|animation| animation.iteration_count).collect())),
+    StyleDeclaration::animation_direction(AnimationDirections(value.iter().map(|animation| animation.direction).collect())),
+    StyleDeclaration::animation_fill_mode(AnimationFillModes(value.iter().map(|animation| animation.fill_mode).collect())),
+    StyleDeclaration::animation_play_state(AnimationPlayStates(value.iter().map(|animation| animation.play_state).collect())),
+    StyleDeclaration::animation_name(if has_animation_name {
+      AnimationNames(value.into_iter().map(|animation| animation.name.unwrap_or_default()).collect())
+    } else {
+      AnimationNames::default()
+    }),
+  );
+}
+
+fn expand_mask_shorthand(value: Backgrounds, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::mask_position(value.iter().map(|background| background.position).collect()),
+    StyleDeclaration::mask_size(value.iter().map(|background| background.size).collect()),
+    StyleDeclaration::mask_repeat(value.iter().map(|background| background.repeat).collect()),
+    StyleDeclaration::mask_image(Some(value.into_iter().map(|background| background.image).collect())),
+  );
+}
+
+fn expand_flex_shorthand(value: Option<Flex>, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::flex_grow(value.map(|value| FlexGrow(value.grow))),
+    StyleDeclaration::flex_shrink(value.map(|value| FlexGrow(value.shrink))),
+    StyleDeclaration::flex_basis(value.map(|value| value.basis)),
+  );
+}
+
+fn expand_border_shorthand(value: Border, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::border_top_width(value.width),
+    StyleDeclaration::border_right_width(value.width),
+    StyleDeclaration::border_bottom_width(value.width),
+    StyleDeclaration::border_left_width(value.width),
+    StyleDeclaration::border_style(value.style),
+    StyleDeclaration::border_color(value.color),
+  );
+}
+
+fn expand_outline_shorthand(value: Border, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::outline_width(value.width),
+    StyleDeclaration::outline_style(value.style),
+    StyleDeclaration::outline_color(value.color),
+  );
+}
+
+fn expand_background_shorthand(value: Backgrounds, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::background_position(value.iter().map(|background| background.position).collect()),
+    StyleDeclaration::background_size(value.iter().map(|background| background.size).collect()),
+    StyleDeclaration::background_repeat(value.iter().map(|background| background.repeat).collect()),
+    StyleDeclaration::background_blend_mode(value.iter().map(|background| background.blend_mode).collect()),
+    StyleDeclaration::background_color(value.iter().filter_map(|background| background.color).next_back().unwrap_or_default()),
+    StyleDeclaration::background_clip(value.last().map(|background| background.clip).unwrap_or_default()),
+    StyleDeclaration::background_image(Some(value.into_iter().map(|background| background.image).collect())),
+  );
+}
+
+fn expand_font_synthesis_shorthand(value: FontSynthesis, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::font_synthesis_weight(value.weight),
+    StyleDeclaration::font_synthesis_style(value.style),
+  );
+}
+
+fn expand_text_stroke_shorthand(value: Option<TextStroke>, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::webkit_text_stroke_width(value.map(|value| value.width)),
+    StyleDeclaration::webkit_text_stroke_color(value.and_then(|value| value.color)),
+  );
+}
+
+fn expand_text_decoration_shorthand(value: TextDecoration, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::text_decoration_line(Some(value.line)),
+    StyleDeclaration::text_decoration_style(value.style.unwrap_or_default()),
+    StyleDeclaration::text_decoration_color(value.color.unwrap_or_default()),
+    StyleDeclaration::text_decoration_thickness(value.thickness.unwrap_or_default()),
+  );
+}
+
+fn expand_white_space_shorthand(value: WhiteSpace, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::text_wrap_mode(value.text_wrap_mode),
+    StyleDeclaration::white_space_collapse(value.white_space_collapse),
+  );
+}
+
+fn expand_text_wrap_shorthand(value: TextWrap, target: &mut Vec<StyleDeclaration>) {
+  push_expanded_declarations!(
+    target;
+    StyleDeclaration::text_wrap_mode(value.mode.unwrap_or_default()),
+    StyleDeclaration::text_wrap_style(value.style),
+  );
 }
 
 /// CSS-wide keywords that can target any longhand declaration.
@@ -986,6 +991,28 @@ pub(crate) enum CssWideKeyword {
   Inherit,
   /// Apply CSS `unset` semantics to the targeted longhand.
   Unset,
+}
+
+impl<'i> FromCss<'i> for CssWideKeyword {
+  fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
+    let location = input.current_source_location();
+    let ident = input.expect_ident_cloned()?;
+
+    match_ignore_ascii_case! { ident.as_ref(),
+      "initial" => Ok(Self::Initial),
+      "inherit" => Ok(Self::Inherit),
+      "unset" => Ok(Self::Unset),
+      _ => Err(Self::unexpected_token_error(location, &Token::Ident(ident))),
+    }
+  }
+
+  fn valid_tokens() -> &'static [CssToken] {
+    &[
+      CssToken::Keyword("initial"),
+      CssToken::Keyword("inherit"),
+      CssToken::Keyword("unset"),
+    ]
+  }
 }
 
 #[cfg(feature = "css_stylesheet_parsing")]
@@ -1001,12 +1028,31 @@ pub struct StyleDeclarationBlock {
 }
 
 impl StyleDeclarationBlock {
+  fn from_declarations(
+    declarations: impl IntoIterator<Item = StyleDeclaration>,
+    important: bool,
+  ) -> Self {
+    let mut block = Self::default();
+    block.push_declarations(declarations, important);
+    block
+  }
+
   /// Appends a declaration and records whether it was important.
   pub(crate) fn push(&mut self, declaration: StyleDeclaration, important: bool) {
     if important {
       self.importance_set.insert(declaration.longhand_id());
     }
     self.declarations.push(declaration);
+  }
+
+  fn push_declarations(
+    &mut self,
+    declarations: impl IntoIterator<Item = StyleDeclaration>,
+    important: bool,
+  ) {
+    for declaration in declarations {
+      self.push(declaration, important);
+    }
   }
 
   pub(crate) fn append(&mut self, mut other: Self) {
@@ -1021,19 +1067,16 @@ impl StyleDeclarationBlock {
 
   pub(crate) fn parse<'i>(
     name: &str,
-    input: &mut cssparser::Parser<'i, '_>,
+    input: &mut Parser<'i, '_>,
   ) -> Result<Self, cssparser::ParseError<'i, Cow<'i, str>>> {
     parse_style_declaration(name, input)
   }
 }
 
-/// Backward-compatible alias for the computed style snapshot.
-pub(crate) type ResolvedStyle = ComputedStyle;
-
-/// Sized font style with resolved font size and line height.
+/// Sized font style with computed font size and line height.
 #[derive(Clone)]
 pub(crate) struct SizedFontStyle<'s> {
-  pub parent: &'s ResolvedStyle,
+  pub parent: &'s ComputedStyle,
   pub line_height: parley::LineHeight,
   pub stroke_width: f32,
   pub letter_spacing: f32,
@@ -1102,7 +1145,7 @@ impl<'s> From<&'s SizedFontStyle<'s>> for TextStyle<'s, InlineBrush> {
   }
 }
 
-impl ResolvedStyle {
+impl ComputedStyle {
   /// Normalize inheritable text-related values to computed values for this node.
   pub(crate) fn make_computed(&mut self, sizing: &Sizing) {
     // `font-size` computed value is already resolved in `sizing.font_size`.
@@ -1194,16 +1237,12 @@ impl ResolvedStyle {
 
   pub(crate) fn text_wrap_mode_and_line_clamp(&self) -> (TextWrapMode, Option<Cow<'_, LineClamp>>) {
     let mut text_wrap_mode = self.text_wrap_mode;
-
     let mut line_clamp = self.line_clamp.as_ref().map(Cow::Borrowed);
 
     // Special case: when nowrap + ellipsis, parley will layout all the text even when it overflows.
     // So we need to use a fixed line clamp of 1 instead.
     if text_wrap_mode == TextWrapMode::NoWrap && self.text_overflow == TextOverflow::Ellipsis {
-      line_clamp = Some(Cow::Owned(LineClamp {
-        count: 1,
-        ellipsis: Some(self.ellipsis_char().to_string()),
-      }));
+      line_clamp = Some(Cow::Owned(self.single_line_ellipsis_clamp()));
 
       text_wrap_mode = TextWrapMode::Wrap;
     }
@@ -1212,67 +1251,11 @@ impl ResolvedStyle {
   }
 
   #[inline]
-  fn convert_template_components(
-    components: &Option<GridTemplateComponents>,
-    sizing: &Sizing,
-  ) -> (Vec<taffy::GridTemplateComponent<String>>, Vec<Vec<String>>) {
-    let mut track_components: Vec<taffy::GridTemplateComponent<String>> = Vec::new();
-    let mut line_name_sets: Vec<Vec<String>> = Vec::new();
-    let mut pending_line_names: Vec<String> = Vec::new();
-
-    if let Some(list) = components {
-      for comp in list.iter() {
-        match comp {
-          GridTemplateComponent::LineNames(names) => {
-            if !names.is_empty() {
-              pending_line_names.extend_from_slice(&names[..]);
-            }
-          }
-          GridTemplateComponent::Single(track_size) => {
-            // Push names for the line preceding this track
-            line_name_sets.push(std::mem::take(&mut pending_line_names));
-            // Push the track component
-            track_components.push(taffy::GridTemplateComponent::Single(
-              track_size.to_min_max(sizing),
-            ));
-          }
-          GridTemplateComponent::Repeat(repetition, tracks) => {
-            // Push names for the line preceding this repeat fragment
-            line_name_sets.push(std::mem::take(&mut pending_line_names));
-
-            // Build repetition
-            let track_sizes: Vec<taffy::TrackSizingFunction> =
-              tracks.iter().map(|t| t.size.to_min_max(sizing)).collect();
-
-            // Build inner line names: one per line inside the repeat, including a trailing set
-            let mut inner_line_names: Vec<Vec<String>> =
-              tracks.iter().map(|t| t.names.to_owned()).collect();
-            if let Some(last) = tracks.last() {
-              if let Some(end) = &last.end_names {
-                inner_line_names.push(end.to_owned());
-              } else {
-                inner_line_names.push(Vec::new());
-              }
-            } else {
-              inner_line_names.push(Vec::new());
-            }
-
-            track_components.push(taffy::GridTemplateComponent::Repeat(
-              taffy::GridTemplateRepetition {
-                count: (*repetition).into(),
-                tracks: track_sizes,
-                line_names: inner_line_names,
-              },
-            ));
-          }
-        }
-      }
+  fn single_line_ellipsis_clamp(&self) -> LineClamp {
+    LineClamp {
+      count: 1,
+      ellipsis: Some(self.ellipsis_char().to_string()),
     }
-
-    // Trailing names after the last track
-    line_name_sets.push(pending_line_names);
-
-    (track_components, line_name_sets)
   }
 
   #[inline]
@@ -1280,41 +1263,67 @@ impl ResolvedStyle {
     SpacePair::from_pair(self.row_gap, self.column_gap)
   }
 
+  #[inline]
+  fn grid_template(
+    components: &Option<GridTemplateComponents>,
+    sizing: &Sizing,
+  ) -> (Vec<taffy::GridTemplateComponent<String>>, Vec<Vec<String>>) {
+    components.as_deref().map_or_else(
+      || (Vec::new(), vec![Vec::new()]),
+      |components| components.collect_components_and_names(sizing),
+    )
+  }
+
+  #[inline]
+  fn resolved_text_shadows(&self, context: &RenderContext) -> SmallVec<[SizedShadow; 4]> {
+    self
+      .text_shadow
+      .as_ref()
+      .map_or_else(SmallVec::new, |shadows| {
+        shadows
+          .iter()
+          .map(|shadow| {
+            SizedShadow::from_text_shadow(
+              *shadow,
+              &context.sizing,
+              context.current_color,
+              Size::from_length(context.sizing.font_size),
+            )
+          })
+          .collect()
+      })
+  }
+
+  #[inline]
+  fn resolved_text_decoration_thickness(&self, sizing: &Sizing) -> SizedTextDecorationThickness {
+    match self.text_decoration_thickness {
+      TextDecorationThickness::Length(Length::Auto) | TextDecorationThickness::FromFont => {
+        SizedTextDecorationThickness::FromFont
+      }
+      TextDecorationThickness::Length(thickness) => {
+        SizedTextDecorationThickness::Value(thickness.to_px(sizing, sizing.font_size))
+      }
+    }
+  }
+
   pub(crate) fn to_sized_font_style(&'_ self, context: &RenderContext) -> SizedFontStyle<'_> {
     let line_height = self.line_height.into_parley(&context.sizing);
-
-    let resolved_stroke_width = self
-      .webkit_text_stroke_width
-      .unwrap_or_default()
-      .to_px(&context.sizing, context.sizing.font_size);
 
     SizedFontStyle {
       sizing: context.sizing.to_owned(),
       parent: self,
       line_height,
-      stroke_width: resolved_stroke_width,
+      stroke_width: self
+        .webkit_text_stroke_width
+        .unwrap_or_default()
+        .to_px(&context.sizing, context.sizing.font_size),
       letter_spacing: self
         .letter_spacing
         .to_px(&context.sizing, context.sizing.font_size),
       word_spacing: self
         .word_spacing
         .to_px(&context.sizing, context.sizing.font_size),
-      text_shadow: self
-        .text_shadow
-        .as_ref()
-        .map_or_else(SmallVec::new, |shadows| {
-          shadows
-            .iter()
-            .map(|shadow| {
-              SizedShadow::from_text_shadow(
-                *shadow,
-                &context.sizing,
-                context.current_color,
-                Size::from_length(context.sizing.font_size),
-              )
-            })
-            .collect()
-        }),
+      text_shadow: self.resolved_text_shadows(context),
       color: self
         .webkit_text_fill_color
         .unwrap_or(self.color)
@@ -1324,30 +1333,24 @@ impl ResolvedStyle {
         .unwrap_or_default()
         .resolve(context.current_color),
       text_decoration_color: self.text_decoration_color.resolve(context.current_color),
-      text_decoration_thickness: match self.text_decoration_thickness {
-        TextDecorationThickness::Length(Length::Auto) | TextDecorationThickness::FromFont => {
-          SizedTextDecorationThickness::FromFont
-        }
-        TextDecorationThickness::Length(thickness) => SizedTextDecorationThickness::Value(
-          thickness.to_px(&context.sizing, context.sizing.font_size),
-        ),
-      },
+      text_decoration_thickness: self.resolved_text_decoration_thickness(&context.sizing),
     }
   }
 
   pub(crate) fn to_taffy_style(&self, sizing: &Sizing) -> taffy::Style {
     // Convert grid templates and associated line names
     let (grid_template_columns, grid_template_column_names) =
-      Self::convert_template_components(&self.grid_template_columns, sizing);
+      Self::grid_template(&self.grid_template_columns, sizing);
     let (grid_template_rows, grid_template_row_names) =
-      Self::convert_template_components(&self.grid_template_rows, sizing);
+      Self::grid_template(&self.grid_template_rows, sizing);
 
     taffy::Style {
       box_sizing: self.box_sizing.into(),
       size: Size {
-        width: self.width.resolve_to_dimension(sizing),
-        height: self.height.resolve_to_dimension(sizing),
-      },
+        width: self.width,
+        height: self.height,
+      }
+      .map(|length| length.resolve_to_dimension(sizing)),
       border: if self.border_style == BorderStyle::None {
         Rect::zero()
       } else {
@@ -1396,19 +1399,33 @@ impl ResolvedStyle {
       flex_shrink: self.flex_shrink.map(|shrink| shrink.0).unwrap_or(1.0),
       flex_wrap: self.flex_wrap.into(),
       min_size: Size {
-        width: self.min_width.resolve_to_dimension(sizing),
-        height: self.min_height.resolve_to_dimension(sizing),
-      },
+        width: self.min_width,
+        height: self.min_height,
+      }
+      .map(|length| length.resolve_to_dimension(sizing)),
       max_size: Size {
-        width: self.max_width.resolve_to_dimension(sizing),
-        height: self.max_height.resolve_to_dimension(sizing),
-      },
-      grid_auto_columns: self.grid_auto_columns.as_ref().map_or_else(Vec::new, |v| {
-        v.iter().map(|s| s.to_min_max(sizing)).collect()
-      }),
-      grid_auto_rows: self.grid_auto_rows.as_ref().map_or_else(Vec::new, |v| {
-        v.iter().map(|s| s.to_min_max(sizing)).collect()
-      }),
+        width: self.max_width,
+        height: self.max_height,
+      }
+      .map(|length| length.resolve_to_dimension(sizing)),
+      grid_auto_columns: self
+        .grid_auto_columns
+        .as_ref()
+        .map_or_else(Vec::new, |tracks| {
+          tracks
+            .iter()
+            .map(|track| track.to_min_max(sizing))
+            .collect()
+        }),
+      grid_auto_rows: self
+        .grid_auto_rows
+        .as_ref()
+        .map_or_else(Vec::new, |tracks| {
+          tracks
+            .iter()
+            .map(|track| track.to_min_max(sizing))
+            .collect()
+        }),
       grid_auto_flow: self.grid_auto_flow.into(),
       grid_column: self
         .grid_column
@@ -1452,7 +1469,7 @@ mod tests {
   use crate::{
     layout::{
       Viewport,
-      style::{ResolvedStyle, Style, StyleDeclaration, properties::*},
+      style::{ComputedStyle, Style, StyleDeclaration, properties::*},
     },
     rendering::Sizing,
   };
@@ -1487,7 +1504,7 @@ mod tests {
 
     tw_style.merge_from(inline_style);
 
-    let resolved = tw_style.inherit(&ResolvedStyle::default());
+    let resolved = tw_style.inherit(&ComputedStyle::default());
     assert_eq!(resolved.width, Length::Px(100.0));
     assert_eq!(resolved.height, Length::Rem(20.0));
     assert_eq!(resolved.color, ColorInput::Value(Color([255, 0, 0, 255])));
@@ -1578,7 +1595,7 @@ mod tests {
 
     preset_style.merge_from(inline_style);
 
-    let inherited = preset_style.inherit(&ResolvedStyle::default());
+    let inherited = preset_style.inherit(&ComputedStyle::default());
     assert_eq!(inherited.text_decoration_color, ColorInput::default());
     assert_eq!(
       inherited.text_decoration_line,
@@ -1603,13 +1620,13 @@ mod tests {
 
     preset_style.merge_from(inline_style);
 
-    let inherited = preset_style.inherit(&ResolvedStyle::default());
+    let inherited = preset_style.inherit(&ComputedStyle::default());
     assert_eq!(inherited.background_color, ColorInput::default());
   }
 
   #[test]
   fn test_isolated_for_clip_path_and_mask_image() {
-    let mut style = ResolvedStyle::default();
+    let mut style = ComputedStyle::default();
     assert!(!style.is_isolated());
 
     style.clip_path = BasicShape::from_str("inset(10px)").ok();
@@ -1623,7 +1640,7 @@ mod tests {
 
   #[test]
   fn test_non_identity_transform_detection() {
-    let mut style = ResolvedStyle::default();
+    let mut style = ComputedStyle::default();
     let sizing = Sizing {
       viewport: Viewport::new(Some(1200), Some(630)),
       container_size: Size::NONE,
@@ -1646,7 +1663,7 @@ mod tests {
 
   #[test]
   fn test_text_overflow_ellipsis_forces_single_line_clamp_on_nowrap() {
-    let style = ResolvedStyle {
+    let style = ComputedStyle {
       text_wrap_mode: TextWrapMode::NoWrap,
       text_overflow: TextOverflow::Ellipsis,
       ..Default::default()
@@ -1671,7 +1688,7 @@ mod tests {
       StyleDeclaration::letter_spacing(Length::Em(1.0)),
       StyleDeclaration::line_height(LineHeight::Length(Length::Em(1.5))),
     ])
-    .inherit(&ResolvedStyle::default());
+    .inherit(&ComputedStyle::default());
     parent.make_computed(&Sizing {
       viewport: Viewport::new(Some(1200), Some(630)),
       container_size: Size::NONE,

@@ -1423,7 +1423,7 @@ impl TailwindProperty {
 
 #[cfg(test)]
 mod tests {
-  use crate::layout::style::{ResolvedStyle, Style, properties::BackgroundImage};
+  use crate::layout::style::{ComputedStyle, Style, properties::BackgroundImage};
 
   use super::*;
 
@@ -1802,7 +1802,7 @@ mod tests {
     let viewport = (100, 100).into();
 
     let style =
-      Style::from(values.into_declaration_block(viewport)).inherit(&ResolvedStyle::default());
+      Style::from(values.into_declaration_block(viewport)).inherit(&ComputedStyle::default());
 
     assert_eq!(
       style.filter,
@@ -1823,7 +1823,7 @@ mod tests {
     let viewport = (100, 100).into();
 
     let style =
-      Style::from(values.into_declaration_block(viewport)).inherit(&ResolvedStyle::default());
+      Style::from(values.into_declaration_block(viewport)).inherit(&ComputedStyle::default());
 
     assert_eq!(
       style.translate,
@@ -1954,7 +1954,7 @@ mod tests {
     };
 
     let style =
-      Style::from(values.into_declaration_block(viewport)).inherit(&ResolvedStyle::default());
+      Style::from(values.into_declaration_block(viewport)).inherit(&ComputedStyle::default());
 
     assert_eq!(
       style.background_image,

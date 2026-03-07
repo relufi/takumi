@@ -21,7 +21,7 @@ use crate::{
     },
     node::{Node, NodeStyleLayers},
     style::{
-      Affine, BlendMode, Color, Display, Filters, Isolation, PercentageNumber, ResolvedStyle,
+      Affine, BlendMode, Color, ComputedStyle, Display, Filters, Isolation, PercentageNumber,
       Style as NodeStyle, apply_stylesheet_animations,
     },
   },
@@ -122,11 +122,11 @@ fn build_style_layers(
 
 #[cfg(test)]
 fn build_inherited_style(
-  parent_style: &ResolvedStyle,
+  parent_style: &ComputedStyle,
   node_layers: NodeStyleLayers,
   #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: MatchedDeclarations,
   viewport: Viewport,
-) -> ResolvedStyle {
+) -> ComputedStyle {
   #[cfg(feature = "css_stylesheet_parsing")]
   let style = {
     let mut style = NodeStyle::default();
@@ -838,7 +838,7 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
 
     fn build_render_context<'g>(
       parent_context: &RenderContext<'g>,
-      style: ResolvedStyle,
+      style: ComputedStyle,
       sizing: Sizing,
       current_color: Color,
     ) -> RenderContext<'g> {
@@ -861,7 +861,7 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
       node: &mut N,
       node_index: usize,
       #[cfg(feature = "css_stylesheet_parsing")] matched_declarations: &[MatchedDeclarations],
-    ) -> (ResolvedStyle, Sizing, Color) {
+    ) -> (ComputedStyle, Sizing, Color) {
       #[cfg(feature = "css_stylesheet_parsing")]
       let default_matched = MatchedDeclarations::default();
       #[cfg(feature = "css_stylesheet_parsing")]
@@ -895,7 +895,7 @@ impl<'g, N: Node<N>> RenderNode<'g, N> {
 
       #[cfg(feature = "css_stylesheet_parsing")]
       for declaration in matched.important.iter() {
-        declaration.apply_to_resolved_ref(&mut style);
+        declaration.apply_to_computed(&mut style);
       }
 
       let font_size = style.font_size.to_px(&child_sizing, child_sizing.font_size);
@@ -1207,12 +1207,12 @@ mod tests {
   use crate::layout::{
     Viewport,
     node::NodeStyleLayers,
-    style::{Length, ResolvedStyle, Style},
+    style::{ComputedStyle, Length, Style},
   };
 
   #[test]
   fn stylesheet_important_overrides_inline_normal() {
-    let parent = ResolvedStyle::default();
+    let parent = ComputedStyle::default();
     let layers = NodeStyleLayers {
       inline: Some(Style::default().with(StyleDeclaration::width(Length::Px(20.0)))),
       ..Default::default()

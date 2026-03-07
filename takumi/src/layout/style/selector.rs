@@ -488,15 +488,15 @@ impl StyleSheet {
 mod tests {
   use super::*;
   use crate::layout::style::{
-    Color, ColorInput, Length, ResolvedStyle, Style, StyleDeclaration, StyleDeclarationBlock,
+    Color, ColorInput, ComputedStyle, Length, Style, StyleDeclaration, StyleDeclarationBlock,
   };
 
-  fn resolved_style_from_declarations(declarations: &StyleDeclarationBlock) -> ResolvedStyle {
+  fn computed_style_from_declarations(declarations: &StyleDeclarationBlock) -> ComputedStyle {
     let mut style = Style::default();
     for declaration in &declarations.declarations {
       declaration.merge_into_ref(&mut style);
     }
-    style.inherit(&ResolvedStyle::default())
+    style.inherit(&ComputedStyle::default())
   }
 
   #[test]
@@ -513,7 +513,7 @@ mod tests {
 
     assert_eq!(rule.selectors.slice().len(), 1);
     assert_eq!(
-      resolved_style_from_declarations(&rule.normal_declarations).width,
+      computed_style_from_declarations(&rule.normal_declarations).width,
       Length::Px(100.0)
     );
   }
@@ -547,11 +547,11 @@ mod tests {
 
     assert_eq!(sheet.rules.len(), 2);
     assert_eq!(
-      resolved_style_from_declarations(&sheet.rules[0].normal_declarations).width,
+      computed_style_from_declarations(&sheet.rules[0].normal_declarations).width,
       Length::Px(10.0)
     );
     assert_eq!(
-      resolved_style_from_declarations(&sheet.rules[1].normal_declarations).height,
+      computed_style_from_declarations(&sheet.rules[1].normal_declarations).height,
       Length::Px(20.0)
     );
   }
@@ -567,7 +567,7 @@ mod tests {
     assert_eq!(sheet.rules.len(), 1);
     assert_eq!(sheet.rules[0].selectors.slice().len(), 2);
     assert_eq!(
-      resolved_style_from_declarations(&sheet.rules[0].normal_declarations).width,
+      computed_style_from_declarations(&sheet.rules[0].normal_declarations).width,
       Length::Px(12.0)
     );
   }
@@ -582,11 +582,11 @@ mod tests {
 
     let rule = &sheet.rules[0];
     assert_eq!(
-      resolved_style_from_declarations(&rule.important_declarations).width,
+      computed_style_from_declarations(&rule.important_declarations).width,
       Length::Px(10.0)
     );
     assert_eq!(
-      resolved_style_from_declarations(&rule.normal_declarations).height,
+      computed_style_from_declarations(&rule.normal_declarations).height,
       Length::Px(20.0)
     );
   }
@@ -631,7 +631,7 @@ mod tests {
       "#,
     );
 
-    let style = resolved_style_from_declarations(&sheet.rules[0].normal_declarations);
+    let style = computed_style_from_declarations(&sheet.rules[0].normal_declarations);
     assert_eq!(
       style.webkit_text_fill_color,
       Some(ColorInput::Value(Color([255, 0, 0, 255])))
@@ -646,7 +646,7 @@ mod tests {
       "#,
     );
 
-    let style = resolved_style_from_declarations(&sheet.rules[0].normal_declarations);
+    let style = computed_style_from_declarations(&sheet.rules[0].normal_declarations);
     assert_eq!(style.width, Length::Px(14.0));
     assert_eq!(style.height, Length::Px(6.0));
   }

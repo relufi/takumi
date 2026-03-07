@@ -36,7 +36,7 @@ use crate::{
   GlobalContext,
   layout::{
     Viewport,
-    style::{Affine, CalcArena, Color, ResolvedStyle},
+    style::{Affine, CalcArena, Color, ComputedStyle},
   },
   resources::image::ImageSource,
 };
@@ -89,7 +89,7 @@ pub struct RenderContext<'g> {
   /// What the `currentColor` value is resolved to.
   pub(crate) current_color: Color,
   /// The style after inheritance.
-  pub(crate) style: Box<ResolvedStyle>,
+  pub(crate) style: Box<ComputedStyle>,
   /// The active time for animation sampling.
   pub(crate) time: RenderTime,
   /// Whether to draw debug borders.
