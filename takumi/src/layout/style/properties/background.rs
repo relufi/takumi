@@ -40,17 +40,7 @@ impl<'i> FromCss<'i> for Background {
     let mut clip = None;
     let mut blend_mode = None;
 
-    loop {
-      if input.is_exhausted() {
-        break;
-      }
-
-      let state = input.state();
-      if input.try_parse(Parser::expect_comma).is_ok() {
-        input.reset(&state);
-        break;
-      }
-
+    while !input.is_exhausted() && !next_is_comma(input) {
       // Try to parse background-color
       if color.is_none()
         && let Ok(value) = input.try_parse(ColorInput::from_css)

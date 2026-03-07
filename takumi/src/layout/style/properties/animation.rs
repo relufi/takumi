@@ -1,7 +1,7 @@
 use cssparser::{BasicParseErrorKind, Parser, Token, match_ignore_ascii_case};
 
 use crate::layout::style::{
-  CssToken, FromCss, MakeComputed, ParseResult, declare_enum_from_css_impl,
+  CssToken, FromCss, MakeComputed, ParseResult, declare_enum_from_css_impl, next_is_comma,
 };
 
 /// Represents a CSS animation time value stored in milliseconds.
@@ -49,31 +49,25 @@ impl MakeComputed for AnimationNames {}
 
 impl<'i> FromCss<'i> for AnimationNames {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
-    if input
-      .try_parse(|parser| parser.expect_ident_matching("none"))
-      .is_ok()
-    {
-      return Ok(Self::default());
-    }
-
     let mut names = Vec::new();
+    let mut saw_named_animation = false;
 
     loop {
-      let location = input.current_source_location();
-      let token = input.next()?;
-      let Token::Ident(name) = token else {
-        return Err(Self::unexpected_token_error(location, token));
-      };
-
-      if name.eq_ignore_ascii_case("none") {
-        return Err(Self::unexpected_token_error(location, token));
+      match parse_animation_name(input)? {
+        Some(name) => {
+          saw_named_animation = true;
+          names.push(name);
+        }
+        None => names.push(String::new()),
       }
-
-      names.push(name.to_string());
 
       if input.try_parse(Parser::expect_comma).is_err() {
         break;
       }
+    }
+
+    if !saw_named_animation {
+      return Ok(Self::default());
     }
 
     Ok(Self(names.into_boxed_slice()))
@@ -357,6 +351,122 @@ impl<'i> FromCss<'i> for AnimationPlayStates {
   }
 }
 
+/// Parsed value for one `animation` shorthand item.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Animation {
+  /// Parsed `animation-duration`.
+  pub duration: AnimationTime,
+  /// Parsed `animation-delay`.
+  pub delay: AnimationTime,
+  /// Parsed `animation-timing-function`.
+  pub timing_function: AnimationTimingFunction,
+  /// Parsed `animation-iteration-count`.
+  pub iteration_count: AnimationIterationCount,
+  /// Parsed `animation-direction`.
+  pub direction: AnimationDirection,
+  /// Parsed `animation-fill-mode`.
+  pub fill_mode: AnimationFillMode,
+  /// Parsed `animation-play-state`.
+  pub play_state: AnimationPlayState,
+  /// Parsed `animation-name`, with `None` representing the CSS `none` keyword.
+  pub name: Option<String>,
+}
+
+impl MakeComputed for Animation {}
+
+impl<'i> FromCss<'i> for Animation {
+  fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
+    let mut animation = Self::default();
+    let mut time_count = 0;
+
+    while !input.is_exhausted() && !next_is_comma(input) {
+      if let Ok(value) = input.try_parse(AnimationTime::from_css) {
+        match time_count {
+          0 => animation.duration = value,
+          1 => animation.delay = value,
+          _ => return Err(input.new_error_for_next_token()),
+        }
+        time_count += 1;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(AnimationTimingFunction::from_css) {
+        animation.timing_function = value;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(AnimationIterationCount::from_css) {
+        animation.iteration_count = value;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(AnimationDirection::from_css) {
+        animation.direction = value;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(AnimationFillMode::from_css) {
+        animation.fill_mode = value;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(AnimationPlayState::from_css) {
+        animation.play_state = value;
+        continue;
+      }
+
+      if let Ok(value) = input.try_parse(parse_animation_name) {
+        animation.name = value;
+        continue;
+      }
+
+      return Err(input.new_error_for_next_token());
+    }
+
+    Ok(animation)
+  }
+
+  fn valid_tokens() -> &'static [CssToken] {
+    Animations::valid_tokens()
+  }
+}
+
+/// Parsed values for the `animation` shorthand.
+pub type Animations = Box<[Animation]>;
+
+impl<'i> FromCss<'i> for Animations {
+  fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
+    let mut animations = Vec::new();
+    animations.push(Animation::from_css(input)?);
+
+    while input.expect_comma().is_ok() {
+      animations.push(Animation::from_css(input)?);
+    }
+
+    Ok(animations.into_boxed_slice())
+  }
+
+  fn valid_tokens() -> &'static [CssToken] {
+    &[
+      CssToken::Token("time"),
+      CssToken::Token("easing-function"),
+      CssToken::Token("number"),
+      CssToken::Keyword("infinite"),
+      CssToken::Keyword("normal"),
+      CssToken::Keyword("reverse"),
+      CssToken::Keyword("alternate"),
+      CssToken::Keyword("alternate-reverse"),
+      CssToken::Keyword("none"),
+      CssToken::Keyword("forwards"),
+      CssToken::Keyword("backwards"),
+      CssToken::Keyword("both"),
+      CssToken::Keyword("running"),
+      CssToken::Keyword("paused"),
+      CssToken::Token("custom-ident"),
+    ]
+  }
+}
+
 fn parse_comma_separated<'i, T>(
   input: &mut Parser<'i, '_>,
   mut parse_item: impl FnMut(&mut Parser<'i, '_>) -> ParseResult<'i, T>,
@@ -371,6 +481,20 @@ fn parse_comma_separated<'i, T>(
   }
 
   Ok(items.into_boxed_slice())
+}
+
+fn parse_animation_name<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, Option<String>> {
+  let location = input.current_source_location();
+  let token = input.next()?;
+  let Token::Ident(name) = token else {
+    return Err(AnimationNames::unexpected_token_error(location, token));
+  };
+
+  if name.eq_ignore_ascii_case("none") {
+    return Ok(None);
+  }
+
+  Ok(Some(name.to_string()))
 }
 
 fn parse_timing_keyword<'i>(
@@ -555,6 +679,14 @@ mod tests {
   }
 
   #[test]
+  fn parse_animation_names_with_none_entry() {
+    assert!(matches!(
+      AnimationNames::from_str("none, slide"),
+      Ok(names) if names.0.as_ref() == ["", "slide"]
+    ));
+  }
+
+  #[test]
   fn parse_steps_timing_functions() {
     assert_eq!(
       AnimationTimingFunction::from_str("step-start"),
@@ -602,5 +734,42 @@ mod tests {
       AnimationDirection::Reverse,
     ]));
     assert_eq!(direction_at(&values, 2), AnimationDirection::Normal);
+  }
+
+  #[test]
+  fn parse_animation_shorthand() {
+    assert_eq!(
+      Animations::from_str("fade 1s ease-in 200ms 2 alternate both paused"),
+      Ok(Box::from([Animation {
+        duration: AnimationTime::from_milliseconds(1000.0),
+        delay: AnimationTime::from_milliseconds(200.0),
+        timing_function: AnimationTimingFunction::EaseIn,
+        iteration_count: AnimationIterationCount::Number(2.0),
+        direction: AnimationDirection::Alternate,
+        fill_mode: AnimationFillMode::Both,
+        play_state: AnimationPlayState::Paused,
+        name: Some("fade".to_string()),
+      }]))
+    );
+  }
+
+  #[test]
+  fn parse_multiple_animation_shorthand_values() {
+    assert_eq!(
+      Animations::from_str("fade 1s linear, 2s slide"),
+      Ok(Box::from([
+        Animation {
+          duration: AnimationTime::from_milliseconds(1000.0),
+          timing_function: AnimationTimingFunction::Linear,
+          name: Some("fade".to_string()),
+          ..Animation::default()
+        },
+        Animation {
+          duration: AnimationTime::from_milliseconds(2000.0),
+          name: Some("slide".to_string()),
+          ..Animation::default()
+        },
+      ]))
+    );
   }
 }

@@ -731,6 +731,25 @@ define_style! {
     vertical_align: VerticalAlign,
   }
   shorthands {
+    animation: Animations => [AnimationName, AnimationDuration, AnimationDelay, AnimationTimingFunction, AnimationIterationCount, AnimationDirection, AnimationFillMode, AnimationPlayState] |value, target, important| {
+      let has_animation_name = value.iter().any(|animation| animation.name.is_some());
+      push_expanded_declarations!(
+        target,
+        important;
+        StyleDeclaration::animation_name(if has_animation_name {
+          AnimationNames(value.iter().map(|animation| animation.name.clone().unwrap_or_default()).collect())
+        } else {
+          AnimationNames::default()
+        }),
+        StyleDeclaration::animation_duration(AnimationDurations(value.iter().map(|animation| animation.duration).collect())),
+        StyleDeclaration::animation_delay(AnimationDurations(value.iter().map(|animation| animation.delay).collect())),
+        StyleDeclaration::animation_timing_function(AnimationTimingFunctions(value.iter().map(|animation| animation.timing_function.clone()).collect())),
+        StyleDeclaration::animation_iteration_count(AnimationIterationCounts(value.iter().map(|animation| animation.iteration_count).collect())),
+        StyleDeclaration::animation_direction(AnimationDirections(value.iter().map(|animation| animation.direction).collect())),
+        StyleDeclaration::animation_fill_mode(AnimationFillModes(value.iter().map(|animation| animation.fill_mode).collect())),
+        StyleDeclaration::animation_play_state(AnimationPlayStates(value.iter().map(|animation| animation.play_state).collect())),
+      );
+    },
     padding: Sides<Length<false>> => [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft] |value, target, important| {
       let values = value.0;
       push_expanded_declarations!(

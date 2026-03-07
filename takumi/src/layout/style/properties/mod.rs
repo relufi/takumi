@@ -241,6 +241,13 @@ impl<T: MakeComputed> MakeComputed for Vec<T> {
   }
 }
 
+pub(crate) fn next_is_comma<'i>(input: &mut Parser<'i, '_>) -> bool {
+  let state = input.state();
+  let is_comma = input.expect_comma().is_ok();
+  input.reset(&state);
+  is_comma
+}
+
 impl<T: Animatable + Clone> Animatable for Option<T> {
   fn interpolate(
     &mut self,

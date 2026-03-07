@@ -3,7 +3,9 @@ use std::{borrow::Cow, fmt::Debug};
 use cssparser::{BasicParseErrorKind, ParseError, Parser};
 
 use crate::{
-  layout::style::{Color, ColorInput, CssToken, FromCss, Length, MakeComputed, ParseResult},
+  layout::style::{
+    Color, ColorInput, CssToken, FromCss, Length, MakeComputed, ParseResult, next_is_comma,
+  },
   rendering::Sizing,
 };
 
@@ -78,13 +80,7 @@ impl<'i> FromCss<'i> for BoxShadow {
     let mut lengths = None;
     let mut inset = false;
 
-    loop {
-      let state = input.state();
-      if input.try_parse(Parser::expect_comma).is_ok() {
-        input.reset(&state);
-        break;
-      }
-
+    while !input.is_exhausted() && !next_is_comma(input) {
       if !inset
         && input
           .try_parse(|input| input.expect_ident_matching("inset"))

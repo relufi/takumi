@@ -3,7 +3,9 @@ use std::{borrow::Cow, fmt::Debug};
 use cssparser::{BasicParseErrorKind, ParseError, Parser};
 
 use crate::{
-  layout::style::{ColorInput, CssToken, FromCss, Length, MakeComputed, ParseResult},
+  layout::style::{
+    ColorInput, CssToken, FromCss, Length, MakeComputed, ParseResult, next_is_comma,
+  },
   rendering::Sizing,
 };
 
@@ -64,13 +66,7 @@ impl<'i> FromCss<'i> for TextShadow {
     let mut color = None;
     let mut lengths = None;
 
-    loop {
-      let state = input.state();
-      if input.try_parse(Parser::expect_comma).is_ok() {
-        input.reset(&state);
-        break;
-      }
-
+    while !input.is_exhausted() && !next_is_comma(input) {
       if lengths.is_none() {
         let value = input.try_parse::<_, _, ParseError<Cow<'i, str>>>(|input| {
           let horizontal = Length::from_css(input)?;
