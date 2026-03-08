@@ -2,7 +2,7 @@ use std::{borrow::Cow, io::Write};
 
 use gif::{Encoder as GifEncoder, Frame as GifFrame, Repeat};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat, RgbaImage, codecs::jpeg::JpegEncoder};
-use png::{ColorType, Compression, Filter};
+use png::{ColorType, Compression};
 use serde::Deserialize;
 
 /// Encode a sequence of RGBA frames into an animated WebP and write to `destination`.
@@ -149,18 +149,14 @@ pub fn write_image<'a, T: Write>(
         ColorType::Rgb
       });
 
-      // Use quality settings to determine compression level.
-      // Higher quality settings map to better compression ratio (slower).
-      // If quality is not specified or < 90, we favor speed.
-      let quality = quality.unwrap_or(75);
+      // PNG is lossless, so default to the better-compression path unless the
+      // caller explicitly requests lower effort via `quality`.
+      let quality = quality.unwrap_or(100);
       if quality >= 90 {
         encoder.set_compression(Compression::Balanced);
       } else {
         encoder.set_compression(Compression::Fast);
       }
-
-      // Fast subtraction filter handles smooth gradients well with minimal overhead.
-      encoder.set_filter(Filter::Sub);
 
       let mut writer = encoder.write_header()?;
       writer.write_image_data(&image_data)?;
