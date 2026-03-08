@@ -14,11 +14,11 @@ Takumi is inspired by [satori](https://github.com/vercel/satori), with a stronge
 
 ## Why teams pick Takumi
 
-- **One-pass rendering** with no SVG-to-image two-step pipeline.
-- **JSX in, pixels out** with cross-runtime delivery.
-- **Node native speed** with WASM fallback for edge and browser workers.
-- **Production text stack**: variable fonts, COLR, WOFF2, and RTL.
-- **Rich output formats**: WebP/PNG/JPEG/APNG or FFmpeg pipelines.
+- **Direct image rendering** with no SVG-to-image conversion step.
+- **One JSX pipeline across runtimes** for Node.js, browsers, and edge workers.
+- **Native performance on Node.js** with WebAssembly fallback when portability matters.
+- **Production-grade text and font support** including variable fonts, COLR, WOFF2, and RTL.
+- **Flexible output targets** from WebP, PNG, JPEG, and GIF to raw frames for FFmpeg pipelines.
 
 ## Performance
 
@@ -59,7 +59,7 @@ For runtime-specific setup (Next.js, Vite SSR, Nitro, Cloudflare, Turbopack), se
 
 ## Showcase
 
-|                                 Takumi OG image [(source)](./example/twitter-images/components/og-image.tsx)                                 |                Package OG card [(ssource)](./example/twitter-images/components/package-og-image.tsx)                 |
+|                                 Takumi OG image [(source)](./example/twitter-images/components/og-image.tsx)                                 |                Package OG card [(ssource)](./example/twitter-images/components/package-og-image.tsx)                |
 | :------------------------------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------: |
 |                                       ![Takumi OG Image](./example/twitter-images/output/og-image.png)                                       |                      ![Package OG Image](./example/twitter-images/output/package-og-image.png)                      |
 |                        **Prisma-style API card** [(source)](./example/twitter-images/components/prisma-og-image.tsx)                         |              **X-style social post** [(source)](./example/twitter-images/components/x-post-image.tsx)               |
