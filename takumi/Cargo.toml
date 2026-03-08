@@ -64,7 +64,7 @@ default-features = false
 features = ["libm", "scale"]
 
 [dependencies.selectors]
-version = "0.35"
+version = "0.36"
 optional = true
 
 [dependencies.precomputed-hash]

@@ -33,6 +33,7 @@
 
 - 5ad65bf: Fix panic when nested inline nodes presented
 - 1c9b8ac: Support background-size: auto
+- 52f1dd5: Fix `background-position`, `mask-position` now default to `top left`
 
 ## 0.70.4
 
