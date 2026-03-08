@@ -29,46 +29,102 @@ enum ParsedRawStyleValue<T> {
   Value(T),
 }
 
-fn parse_raw_typed_value<'de, T, E>(
-  source: &'de str,
-  invalid_input_error: impl FnOnce() -> E,
-) -> Result<ParsedRawStyleValue<T>, E>
-where
-  T: for<'i> FromCss<'i>,
-  E: serde::de::Error,
-{
-  if let Ok(keyword) = CssWideKeyword::from_str(source) {
-    return Ok(ParsedRawStyleValue::Keyword(keyword));
-  }
-
-  T::from_str(source)
-    .map(ParsedRawStyleValue::Value)
-    .map_err(|_| invalid_input_error())
+enum ParsedDeclarations {
+  None,
+  Single(StyleDeclaration),
+  Many(Vec<StyleDeclaration>),
 }
 
-fn parse_raw_style_value<'de, T, E>(
-  raw_value: RawCssInput<'de>,
-) -> Result<ParsedRawStyleValue<T>, E>
+type ExpectedMessageFn = fn() -> super::CssExpectedMessage<'static>;
+
+enum RawStyleValueParseError<'de> {
+  Value {
+    value: Cow<'de, str>,
+    expected_message: ExpectedMessageFn,
+  },
+  NumberType {
+    number: super::RawCssNumber,
+    expected_message: ExpectedMessageFn,
+  },
+  UnexpectedType {
+    unexpected: super::RawCssUnexpected,
+    expected_message: ExpectedMessageFn,
+  },
+}
+
+impl RawStyleValueParseError<'_> {
+  fn into_serde_error<E>(self) -> E
+  where
+    E: serde::de::Error,
+  {
+    match self {
+      Self::Value {
+        value,
+        expected_message,
+      } => E::invalid_value(
+        serde::de::Unexpected::Str(value.as_ref()),
+        &expected_message(),
+      ),
+      Self::NumberType {
+        number,
+        expected_message,
+      } => E::invalid_type(number.unexpected(), &expected_message()),
+      Self::UnexpectedType {
+        unexpected,
+        expected_message,
+      } => E::invalid_type(unexpected.as_serde_unexpected(), &expected_message()),
+    }
+  }
+}
+
+fn expected_message<T>() -> super::CssExpectedMessage<'static>
 where
   T: for<'i> FromCss<'i>,
-  E: serde::de::Error,
+{
+  super::css_expected_message::<T>()
+}
+
+fn parse_raw_style_value<'de, T>(
+  raw_value: RawCssInput<'de>,
+) -> Result<ParsedRawStyleValue<T>, RawStyleValueParseError<'de>>
+where
+  T: for<'i> FromCss<'i>,
 {
   match raw_value {
-    RawCssInput::Str(value) => parse_raw_typed_value(value.as_ref(), || {
-      E::invalid_value(
-        serde::de::Unexpected::Str(value.as_ref()),
-        &super::css_expected_message::<T>(),
-      )
-    }),
+    RawCssInput::Str(value) => {
+      if let Ok(keyword) = CssWideKeyword::from_str(value.as_ref()) {
+        Ok(ParsedRawStyleValue::Keyword(keyword))
+      } else {
+        let parsed_value = T::from_str(value.as_ref()).ok();
+
+        let Some(parsed_value) = parsed_value else {
+          return Err(RawStyleValueParseError::Value {
+            value,
+            expected_message: expected_message::<T>,
+          });
+        };
+
+        Ok(ParsedRawStyleValue::Value(parsed_value))
+      }
+    }
     RawCssInput::Number(number) => {
       let source = number.to_string();
-      parse_raw_typed_value(&source, || {
-        E::invalid_type(number.unexpected(), &super::css_expected_message::<T>())
-      })
+
+      if let Ok(keyword) = CssWideKeyword::from_str(&source) {
+        Ok(ParsedRawStyleValue::Keyword(keyword))
+      } else {
+        T::from_str(&source)
+          .map(ParsedRawStyleValue::Value)
+          .map_err(|_| RawStyleValueParseError::NumberType {
+            number,
+            expected_message: expected_message::<T>,
+          })
+      }
     }
-    RawCssInput::Unexpected(unexpected) => {
-      unexpected.as_invalid_type::<T, E, ParsedRawStyleValue<T>>()
-    }
+    RawCssInput::Unexpected(unexpected) => Err(RawStyleValueParseError::UnexpectedType {
+      unexpected,
+      expected_message: expected_message::<T>,
+    }),
   }
 }
 
@@ -91,16 +147,15 @@ where
   }
 }
 
-fn parse_raw_longhand_declaration<'de, T, E>(
+fn parse_raw_longhand_declaration<'de, T>(
   longhand_id: LonghandId,
   raw_value: RawCssInput<'de>,
   to_declaration: impl FnOnce(T) -> StyleDeclaration,
-) -> Result<StyleDeclaration, E>
+) -> Result<StyleDeclaration, RawStyleValueParseError<'de>>
 where
   T: for<'t> FromCss<'t>,
-  E: serde::de::Error,
 {
-  match parse_raw_style_value::<T, E>(raw_value)? {
+  match parse_raw_style_value::<T>(raw_value)? {
     ParsedRawStyleValue::Keyword(keyword) => {
       Ok(StyleDeclaration::CssWideKeyword(longhand_id, keyword))
     }
@@ -263,10 +318,93 @@ macro_rules! define_style {
         }
       }
 
+      #[repr(u8)]
       #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
       pub(crate) enum ShorthandId {
         $([<$shorthand:camel>],)*
       }
+
+      impl ShorthandId {
+        const COUNT: usize = 0 $(+ { let _ = Self::[<$shorthand:camel>]; 1 })*;
+
+        const fn index(self) -> usize {
+          self as usize
+        }
+      }
+
+      type LonghandParseFn =
+        for<'i> fn(&mut cssparser::Parser<'i, '_>)
+          -> Result<ParsedDeclarations, cssparser::ParseError<'i, Cow<'i, str>>>;
+      type ShorthandParseFn =
+        for<'i> fn(&mut cssparser::Parser<'i, '_>)
+          -> Result<ParsedDeclarations, cssparser::ParseError<'i, Cow<'i, str>>>;
+
+      $(
+        fn [<parse_ $longhand _declarations>]<'i>(
+          input: &mut cssparser::Parser<'i, '_>,
+        ) -> Result<ParsedDeclarations, cssparser::ParseError<'i, Cow<'i, str>>> {
+          Ok(ParsedDeclarations::Single(parse_longhand_declaration::<$longhand_ty>(
+            input,
+            LonghandId::[<$longhand:camel>],
+            StyleDeclaration::[<$longhand:camel>],
+          )?))
+        }
+
+        fn [<parse_raw_ $longhand _declarations>]<'de>(
+          raw_value: RawCssInput<'de>,
+        ) -> Result<ParsedDeclarations, RawStyleValueParseError<'de>> {
+          Ok(ParsedDeclarations::Single(
+            parse_raw_longhand_declaration::<$longhand_ty>(
+              LonghandId::[<$longhand:camel>],
+              raw_value,
+              StyleDeclaration::[<$longhand:camel>],
+            )?,
+          ))
+        }
+      )*
+
+      const LONGHAND_PARSE_FNS: [LonghandParseFn; LonghandId::COUNT] = [
+        $([<parse_ $longhand _declarations>],)*
+      ];
+      const RAW_LONGHAND_PARSE_FNS: [for<'de> fn(RawCssInput<'de>) -> Result<ParsedDeclarations, RawStyleValueParseError<'de>>; LonghandId::COUNT] = [
+        $([<parse_raw_ $longhand _declarations>],)*
+      ];
+
+      $(
+        fn [<parse_ $shorthand _declarations>]<'i>(
+          input: &mut cssparser::Parser<'i, '_>,
+        ) -> Result<ParsedDeclarations, cssparser::ParseError<'i, Cow<'i, str>>> {
+          Ok(ParsedDeclarations::Many(expand_shorthand(
+            <$shorthand_ty as FromCss>::from_css(input)?,
+            |$value, $target_var| {
+              $expand
+            },
+          )))
+        }
+
+        fn [<parse_raw_ $shorthand _declarations>]<'de>(
+          raw_value: RawCssInput<'de>,
+        ) -> Result<ParsedDeclarations, RawStyleValueParseError<'de>> {
+          match parse_raw_style_value::<$shorthand_ty>(raw_value)? {
+            ParsedRawStyleValue::Keyword(keyword) => Ok(ParsedDeclarations::Many(vec![
+              $(StyleDeclaration::CssWideKeyword(LonghandId::$target, keyword)),+
+            ])),
+            ParsedRawStyleValue::Value(value) => Ok(ParsedDeclarations::Many(expand_shorthand(
+              value,
+              |$value, $target_var| {
+                $expand
+              },
+            ))),
+          }
+        }
+      )*
+
+      const SHORTHAND_PARSE_FNS: [ShorthandParseFn; ShorthandId::COUNT] = [
+        $([<parse_ $shorthand _declarations>],)*
+      ];
+      const RAW_SHORTHAND_PARSE_FNS: [for<'de> fn(RawCssInput<'de>) -> Result<ParsedDeclarations, RawStyleValueParseError<'de>>; ShorthandId::COUNT] = [
+        $([<parse_raw_ $shorthand _declarations>],)*
+      ];
 
       #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
       pub(crate) enum PropertyId {
@@ -305,44 +443,34 @@ macro_rules! define_style {
         fn parse_declarations<'i>(
           self,
           input: &mut cssparser::Parser<'i, '_>,
-        ) -> Result<Vec<StyleDeclaration>, cssparser::ParseError<'i, Cow<'i, str>>> {
+        ) -> Result<ParsedDeclarations, cssparser::ParseError<'i, Cow<'i, str>>> {
           match self {
             Self::Ignored => {
               while input.next_including_whitespace_and_comments().is_ok() {}
-              Ok(Vec::new())
+              Ok(ParsedDeclarations::None)
             }
-            Self::Shorthand(property) => parse_shorthand_declarations(property, input),
-            Self::Longhand(property) => match property {
-              $(
-                LonghandId::[<$longhand:camel>] => Ok(vec![parse_longhand_declaration::<$longhand_ty>(
-                  input,
-                  LonghandId::[<$longhand:camel>],
-                  StyleDeclaration::[<$longhand:camel>],
-                )?]),
-              )*
-            },
+            Self::Shorthand(property) => SHORTHAND_PARSE_FNS[property.index()](input),
+            Self::Longhand(property) => LONGHAND_PARSE_FNS[property.index()](input),
           }
         }
 
         fn parse_raw_declarations<'de, E>(
           self,
           raw_value: RawCssInput<'de>,
-        ) -> Result<Vec<StyleDeclaration>, E>
+        ) -> Result<ParsedDeclarations, E>
         where
           E: serde::de::Error,
         {
           match self {
-            Self::Ignored => Ok(Vec::new()),
-            Self::Shorthand(property) => parse_shorthand_declarations_from_raw(property, raw_value),
-            Self::Longhand(property) => match property {
-              $(
-                LonghandId::[<$longhand:camel>] => Ok(vec![parse_raw_longhand_declaration::<$longhand_ty, E>(
-                  LonghandId::[<$longhand:camel>],
-                  raw_value,
-                  StyleDeclaration::[<$longhand:camel>],
-                )?]),
-              )*
-            },
+            Self::Ignored => Ok(ParsedDeclarations::None),
+            Self::Shorthand(property) => {
+              RAW_SHORTHAND_PARSE_FNS[property.index()](raw_value)
+                .map_err(RawStyleValueParseError::into_serde_error)
+            }
+            Self::Longhand(property) => {
+              RAW_LONGHAND_PARSE_FNS[property.index()](raw_value)
+                .map_err(RawStyleValueParseError::into_serde_error)
+            }
           }
         }
       }
@@ -351,7 +479,7 @@ macro_rules! define_style {
         name: &str,
         input: &mut cssparser::Parser<'i, '_>,
       ) -> Result<StyleDeclarationBlock, cssparser::ParseError<'i, Cow<'i, str>>> {
-        Ok(StyleDeclarationBlock::from_declarations(
+        Ok(StyleDeclarationBlock::from_parsed_declarations(
           PropertyId::from_kebab_case(name).parse_declarations(input)?,
           false,
         ))
@@ -476,7 +604,9 @@ macro_rules! define_style {
         where
           E: serde::de::Error,
         {
-          self.push_declarations(property.parse_raw_declarations(raw_value)?, important);
+          self
+            .declarations
+            .append_parsed_declarations(property.parse_raw_declarations(raw_value)?, important);
           Ok(())
         }
       }
@@ -682,45 +812,6 @@ macro_rules! define_style {
         }
       }
 
-      fn parse_shorthand_declarations<'i>(
-        property: ShorthandId,
-        input: &mut cssparser::Parser<'i, '_>,
-      ) -> Result<Vec<StyleDeclaration>, cssparser::ParseError<'i, Cow<'i, str>>> {
-        match property {
-          $(
-            ShorthandId::[<$shorthand:camel>] => {
-              Ok(expand_shorthand(<$shorthand_ty as FromCss>::from_css(input)?, |$value, $target_var| {
-                $expand
-              }))
-            }
-          )*
-        }
-      }
-
-      fn parse_shorthand_declarations_from_raw<'de, E>(
-        property: ShorthandId,
-        raw_value: RawCssInput<'de>,
-      ) -> Result<Vec<StyleDeclaration>, E>
-      where
-        E: serde::de::Error,
-      {
-        match property {
-          $(
-            ShorthandId::[<$shorthand:camel>] => {
-              match parse_raw_style_value::<$shorthand_ty, E>(raw_value)? {
-                ParsedRawStyleValue::Keyword(keyword) => {
-                  Ok(vec![
-                    $(StyleDeclaration::CssWideKeyword(LonghandId::$target, keyword)),+
-                  ])
-                }
-                ParsedRawStyleValue::Value(value) => Ok(expand_shorthand(value, |$value, $target_var| {
-                  $expand
-                })),
-              }
-            }
-          )*
-        }
-      }
     }
   };
 }
@@ -1226,12 +1317,9 @@ pub struct StyleDeclarationBlock {
 }
 
 impl StyleDeclarationBlock {
-  fn from_declarations(
-    declarations: impl IntoIterator<Item = StyleDeclaration>,
-    important: bool,
-  ) -> Self {
+  fn from_parsed_declarations(declarations: ParsedDeclarations, important: bool) -> Self {
     let mut block = Self::default();
-    block.push_declarations(declarations, important);
+    block.append_parsed_declarations(declarations, important);
     block
   }
 
@@ -1241,6 +1329,18 @@ impl StyleDeclarationBlock {
       self.importance_set.insert(declaration.longhand_id());
     }
     self.declarations.push(declaration);
+  }
+
+  fn append_parsed_declarations(&mut self, declarations: ParsedDeclarations, important: bool) {
+    match declarations {
+      ParsedDeclarations::None => {}
+      ParsedDeclarations::Single(declaration) => self.push(declaration, important),
+      ParsedDeclarations::Many(declarations) => {
+        for declaration in declarations {
+          self.push(declaration, important);
+        }
+      }
+    }
   }
 
   fn push_declarations(
@@ -1777,6 +1877,28 @@ mod tests {
         255, 0, 0, 255
       ])))]
     );
+  }
+
+  #[test]
+  fn parse_style_declaration_expands_shorthands_in_order() {
+    let declarations = parse_declarations("padding", "1px 2px");
+
+    assert_eq!(
+      declarations.iter().collect::<Vec<_>>(),
+      vec![
+        &StyleDeclaration::padding_top(Length::Px(1.0)),
+        &StyleDeclaration::padding_right(Length::Px(2.0)),
+        &StyleDeclaration::padding_bottom(Length::Px(1.0)),
+        &StyleDeclaration::padding_left(Length::Px(2.0)),
+      ]
+    );
+  }
+
+  #[test]
+  fn parse_style_declaration_ignores_unknown_properties() {
+    let declarations = parse_declarations("not-a-real-property", "123");
+
+    assert!(declarations.iter().next().is_none());
   }
 
   #[test]

@@ -70,17 +70,6 @@ impl RawCssUnexpected {
       Self::Other(kind) => de::Unexpected::Other(kind),
     }
   }
-
-  #[cold]
-  #[inline(never)]
-  fn as_invalid_type<T, E, R>(&self) -> Result<R, E>
-  where
-    T: for<'i> FromCss<'i>,
-    E: de::Error,
-  {
-    let expected = css_expected_message::<T>();
-    Err(E::invalid_type(self.as_serde_unexpected(), &expected))
-  }
 }
 
 #[derive(Clone)]
