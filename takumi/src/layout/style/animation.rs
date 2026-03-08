@@ -665,7 +665,7 @@ mod tests {
       current_color(),
     );
 
-    assert_eq!(target, ColorInput::Value(Color([57, 67, 77, 255])));
+    assert_eq!(target, ColorInput::Value(Color([60, 70, 80, 255])));
   }
 
   #[test]
