@@ -6,7 +6,7 @@ import archivo from "../../../assets/fonts/archivo/Archivo-VariableFont_wdth,wgh
 import DocsTemplate from "../../../takumi-template/src/templates/docs-template";
 
 const fetchCache = new Map();
-const logoUrl = "https://yeecord.com/img/logo.png";
+const logoUrl = "https://takumi.kane.tw/logo.svg";
 
 initSync(module);
 
@@ -33,7 +33,7 @@ export default {
       <DocsTemplate
         title={`Hello, ${name}`}
         description="This is an example of rendering on Cloudflare Workers!"
-        icon={<img tw="w-24 rounded-full" src={logoUrl} alt="Logo" />}
+        icon={<img tw="w-16" src={logoUrl} alt="Logo" />}
         site="Takumi"
         primaryColor="#F48120"
         primaryTextColor="#fff"
