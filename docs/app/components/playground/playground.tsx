@@ -1,7 +1,6 @@
 import {
   ChevronDownIcon,
   Code2Icon,
-  CopyIcon,
   DownloadIcon,
   ImageIcon,
   Loader2Icon,
@@ -475,21 +474,6 @@ function RenderPreview({
     );
   }
 
-  const copyImage = async () => {
-    if (!("clipboard" in navigator) || typeof ClipboardItem === "undefined") {
-      return;
-    }
-
-    const response = await fetch(result.outputUrl);
-    const blob = await response.blob();
-
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        [blob.type]: blob,
-      }),
-    ]);
-  };
-
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center gap-8 p-4 sm:p-8">
       <div
@@ -526,17 +510,6 @@ function RenderPreview({
             {Math.round(result.duration)}ms
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="h-9 w-9 rounded-full border border-zinc-800/80 bg-zinc-900/80 text-zinc-100 shadow-lg backdrop-blur-md hover:bg-zinc-800/90"
-          onClick={() => {
-            void copyImage();
-          }}
-          title="Copy image"
-        >
-          <CopyIcon className="h-3.5 w-3.5" />
-        </Button>
         <Button
           variant="default"
           size="sm"

@@ -304,7 +304,6 @@ pub(crate) fn create_inline_layout<'c, 'g: 'c, N: Node<N> + 'c>(
   if style.parent.text_wrap_style == TextWrapStyle::Balance {
     make_balanced_text(
       &mut layout,
-      &text,
       max_width,
       max_height,
       line_count,

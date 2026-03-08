@@ -1,8 +1,7 @@
 use std::{borrow::Cow, convert::Into};
-use unicode_linebreak::linebreaks;
 
 use image::{GenericImageView, Pixel, Rgba, RgbaImage};
-use parley::GlyphRun;
+use parley::{GlyphRun, layout::BreakReason};
 use swash::{ColorPalette, scale::outline::Outline};
 use taffy::{Layout, Point, Size};
 use zeno::{Command, PathData, Stroke};
@@ -597,33 +596,22 @@ pub(crate) fn apply_white_space_collapse<'a>(
   }
 }
 
-/// Counts the number of word splits caused by line breaks.
-/// A word split occurs when a line break happens at a position that is not
-/// a legal Unicode line break opportunity (e.g. forced by break-word).
-fn count_word_splits(layout: &InlineLayout, text: &str) -> usize {
-  let mut splits = 0;
-  let lines: Vec<_> = layout.lines().collect();
+// Preserve the original number of forced breaks while balancing so #437 does not
+// reintroduce mid-word splits under `word-break: break-word`.
+fn count_emergency_line_breaks(layout: &InlineLayout) -> usize {
+  let line_count = layout.lines().count();
 
-  // Get all legal break opportunities
-  let legal_breaks: Vec<usize> = linebreaks(text).map(|(offset, _)| offset).collect();
-
-  for i in 0..lines.len().saturating_sub(1) {
-    let end = lines[i].text_range().end;
-    let start = lines[i + 1].text_range().start;
-
-    if end == start && end > 0 && end < text.len() && !legal_breaks.contains(&end) {
-      splits += 1;
-    }
-  }
-
-  splits
+  layout
+    .lines()
+    .take(line_count.saturating_sub(1))
+    .filter(|line| line.break_reason() == BreakReason::Emergency)
+    .count()
 }
 
 /// Use binary search to find the minimum width that maintains the same number of lines.
 /// Returns `true` if a meaningful adjustment was made.
 pub(crate) fn make_balanced_text(
   inline_layout: &mut InlineLayout,
-  text: &str,
   max_width: f32,
   max_height: Option<MaxHeight>,
   target_lines: usize,
@@ -633,7 +621,7 @@ pub(crate) fn make_balanced_text(
     return false;
   }
 
-  let initial_splits = count_word_splits(inline_layout, text);
+  let initial_emergency_breaks = count_emergency_line_breaks(inline_layout);
 
   // Binary search between half width and full width
   let mut left = max_width / 2.0;
@@ -650,8 +638,9 @@ pub(crate) fn make_balanced_text(
     break_lines(inline_layout, mid, None);
     let lines_at_mid = inline_layout.lines().count();
 
-    if lines_at_mid > target_lines || count_word_splits(inline_layout, text) > initial_splits {
-      // Too narrow or introduced new word splits
+    if lines_at_mid > target_lines
+      || count_emergency_line_breaks(inline_layout) > initial_emergency_breaks
+    {
       left = mid;
     } else {
       // Can fit in target lines, try narrower
