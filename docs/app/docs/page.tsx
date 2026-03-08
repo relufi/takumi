@@ -25,6 +25,7 @@ import {
 import { redirect } from "react-router";
 import { Accordion, Accordions } from "~/components/accordion";
 import { TypeTable } from "~/components/type-table";
+import { Video } from "~/components/video";
 import { baseOptions } from "~/layout-config";
 import { source } from "~/source";
 import browserCollections from "../../.source/browser";
@@ -47,6 +48,7 @@ const components = {
   Accordion,
   Accordions,
   TypeTable,
+  Video,
 };
 
 export function loader({ params }: Route.LoaderArgs) {
