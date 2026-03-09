@@ -22,8 +22,8 @@ Takumi is inspired by [satori](https://github.com/vercel/satori), with a stronge
 
 ## Performance
 
-In [Image Bench](https://image-bench.kane.tw/), Takumi is typically **2-10x faster** than `next/og`.
-See benchmark runs and templates on [Image Bench](https://image-bench.kane.tw/).
+Takumi is built for fast image rendering across Node.js and WebAssembly runtimes.
+See current benchmark runs and templates on [Image Bench](https://image-bench.kane.tw/), including comparisons with `next/og`.
 
 ## First render in 30 seconds
 

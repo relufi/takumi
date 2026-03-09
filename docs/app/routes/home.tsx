@@ -74,7 +74,7 @@ export default function Home() {
       <title>Takumi — Render your React components to images.</title>
       <meta
         name="description"
-        content="Rust-powered image rendering engine. Write JSX, get pixels. 2–10× faster than next/og. Runs everywhere."
+        content="Rust-powered image rendering engine. Write JSX, get pixels. Built for fast image generation across runtimes."
       />
       <meta
         name="og:title"
@@ -82,7 +82,7 @@ export default function Home() {
       />
       <meta
         name="og:description"
-        content="Rust-powered image rendering engine. Write JSX, get pixels. 2–10× faster than next/og. Runs everywhere."
+        content="Rust-powered image rendering engine. Write JSX, get pixels. Built for fast image generation across runtimes."
       />
       <meta
         name="og:image"

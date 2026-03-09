@@ -1,11 +1,10 @@
 import { Link } from "react-router";
 import { Button } from "~/components/ui/button";
 import { AnimatedOrb } from "./animated-orb";
-import { StatBlock } from "./stat-block";
 
 export function Hero() {
   return (
-    <section className="relative min-h-screen max-sm:min-h-auto flex flex-col items-center justify-center px-6 pt-4 pb-16 max-sm:pt-16 max-sm:pb-12 overflow-hidden">
+    <section className="relative min-h-[70dvh] max-sm:min-h-auto flex flex-col items-center justify-center px-6 py-16 overflow-hidden">
       <AnimatedOrb />
 
       <div className="relative text-center max-w-[800px] z-10">
@@ -19,7 +18,7 @@ export function Hero() {
         <p className="text-[clamp(1rem,2vw,1.2rem)] leading-relaxed text-muted-foreground max-w-[520px] mx-auto mb-10 animate-reveal-up [animation-delay:200ms]">
           Rust-powered image rendering engine. Write JSX, get pixels.
           <br />
-          2–10× faster than next/og. Runs everywhere.
+          Built for fast image generation. Runs everywhere.
         </p>
 
         <div className="flex gap-3 justify-center flex-wrap animate-reveal-up [animation-delay:300ms]">
@@ -39,12 +38,6 @@ export function Hero() {
             <Link to="/playground">Open Playground</Link>
           </Button>
         </div>
-      </div>
-
-      <div className="w-full max-w-[750px] relative z-10 flex max-sm:flex-col gap-px mt-20 rounded-2xl overflow-hidden border border-border bg-border animate-reveal-up [animation-delay:450ms]">
-        <StatBlock value="2–10×" label="Faster than next/og" delay={500} />
-        <StatBlock value="140+" label="Supported CSS properties" delay={600} />
-        <StatBlock value="1K+" label="GitHub stars" delay={700} />
       </div>
     </section>
   );
