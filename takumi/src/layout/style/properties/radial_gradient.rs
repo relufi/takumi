@@ -7,8 +7,8 @@ use super::gradient_utils::{
 };
 use crate::{
   layout::style::{
-    Color, ColorInterpolationMethod, CssToken, FromCss, GradientStop, GradientStops, Length,
-    MakeComputed, ObjectPosition, ParseResult, declare_enum_from_css_impl,
+    ColorInterpolationMethod, CssToken, FromCss, GradientStop, GradientStops, Length, MakeComputed,
+    ObjectPosition, ParseResult, declare_enum_from_css_impl,
   },
   rendering::{RenderContext, Sizing},
 };
@@ -96,7 +96,7 @@ pub(crate) struct RadialGradientTile {
   pub distance_to_lut_scale: f32,
   /// Pre-computed color lookup table for fast gradient sampling.
   /// Maps normalized distance [0.0, 1.0] from center to color.
-  pub color_lut: Vec<[f32; 4]>,
+  pub color_lut: Vec<Rgba<u8>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,7 +121,7 @@ impl GenericImageView for RadialGradientTile {
     }
 
     if self.color_lut.len() == 1 {
-      return Color::from(self.color_lut[0]).into();
+      return self.color_lut[0];
     }
 
     let dx = (x as f32 - self.cx) / self.radius_x.max(1e-6);
@@ -130,7 +130,7 @@ impl GenericImageView for RadialGradientTile {
     let lut_idx =
       self.lut_index_for_normalized_distance_with_len(normalized_distance, self.color_lut.len());
 
-    Color::from(self.color_lut[lut_idx]).into()
+    self.color_lut[lut_idx]
   }
 }
 
@@ -274,8 +274,13 @@ impl GradientOverlayTile for RadialGradientTile {
   }
 
   #[inline(always)]
-  fn lut_samples(&self) -> &[[f32; 4]] {
-    &self.color_lut
+  fn lut_len(&self) -> usize {
+    self.color_lut.len()
+  }
+
+  #[inline(always)]
+  fn sample_at(&self, lut_idx: usize) -> Rgba<u8> {
+    self.color_lut[lut_idx]
   }
 
   #[inline(always)]

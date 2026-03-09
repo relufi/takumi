@@ -42,13 +42,13 @@ impl GenericImageView for LinearGradientTile {
     }
 
     if self.color_lut.len() == 1 {
-      return Color::from(self.color_lut[0]).into();
+      return self.color_lut[0];
     }
 
     let projection = self.projection_at(x as f32, y as f32);
     let lut_idx = self.lut_index_for_projection_with_len(projection, self.color_lut.len());
 
-    Color::from(self.color_lut[lut_idx]).into()
+    self.color_lut[lut_idx]
   }
 }
 
@@ -71,7 +71,7 @@ pub(crate) struct LinearGradientTile {
   pub position_to_lut_scale: f32,
   /// Pre-computed color lookup table for fast gradient sampling.
   /// Maps normalized position [0.0, 1.0] to color.
-  pub color_lut: Vec<[f32; 4]>,
+  pub color_lut: Vec<Rgba<u8>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,8 +153,13 @@ impl GradientOverlayTile for LinearGradientTile {
   }
 
   #[inline(always)]
-  fn lut_samples(&self) -> &[[f32; 4]] {
-    &self.color_lut
+  fn lut_len(&self) -> usize {
+    self.color_lut.len()
+  }
+
+  #[inline(always)]
+  fn sample_at(&self, lut_idx: usize) -> Rgba<u8> {
+    self.color_lut[lut_idx]
   }
 
   #[inline(always)]
