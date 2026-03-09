@@ -183,9 +183,9 @@ pub(crate) fn overlay_gradient_tile_fast_normal_unconstrained<T: GradientOverlay
 
       let current = bottom.get_pixel_mut(dest_x as u32, dest_y as u32);
       if pixel.0[3] == u8::MAX {
-        *current = pixel.into();
+        *current = pixel;
       } else {
-        blend_pixel(current, pixel.into(), super::BlendMode::Normal);
+        blend_pixel(current, pixel, super::BlendMode::Normal);
       }
     }
   }
