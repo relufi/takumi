@@ -140,6 +140,12 @@ impl<'i> FromCss<'i> for BoxShadow {
   }
 }
 
+impl crate::layout::style::tw::TailwindPropertyParser for BoxShadow {
+  fn parse_tw(token: &str) -> Option<Self> {
+    Self::from_str(token).ok()
+  }
+}
+
 impl MakeComputed for BoxShadow {
   fn make_computed(&mut self, sizing: &Sizing) {
     self.offset_x.make_computed(sizing);

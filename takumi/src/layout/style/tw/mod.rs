@@ -80,6 +80,12 @@ struct TailwindDeclarationBuilder {
   declarations: StyleDeclarationBlock,
   gradient_state: TwGradientState,
   transform_state: TwTransformState,
+  shadow: Option<BoxShadow>,
+  shadow_important: bool,
+  shadow_color: Option<ColorInput>,
+  text_shadow: Option<TextShadow>,
+  text_shadow_important: bool,
+  text_shadow_color: Option<ColorInput>,
   filter: Option<Filters>,
   filter_important: bool,
   backdrop_filter: Option<Filters>,
@@ -93,6 +99,42 @@ struct TailwindDeclarationBuilder {
 impl TailwindDeclarationBuilder {
   fn push(&mut self, declaration: StyleDeclaration, important: bool) {
     self.declarations.push(declaration, important);
+  }
+
+  fn set_shadow(&mut self, mut shadow: BoxShadow, important: bool) {
+    if let Some(color) = self.shadow_color {
+      shadow.color = color;
+    }
+
+    self.shadow = Some(shadow);
+    self.shadow_important = important;
+  }
+
+  fn set_shadow_color(&mut self, color: ColorInput, important: bool) {
+    self.shadow_color = Some(color);
+    self.shadow_important = important;
+
+    if let Some(shadow) = self.shadow.as_mut() {
+      shadow.color = color;
+    }
+  }
+
+  fn set_text_shadow(&mut self, mut text_shadow: TextShadow, important: bool) {
+    if let Some(color) = self.text_shadow_color {
+      text_shadow.color = color;
+    }
+
+    self.text_shadow = Some(text_shadow);
+    self.text_shadow_important = important;
+  }
+
+  fn set_text_shadow_color(&mut self, color: ColorInput, important: bool) {
+    self.text_shadow_color = Some(color);
+    self.text_shadow_important = important;
+
+    if let Some(text_shadow) = self.text_shadow.as_mut() {
+      text_shadow.color = color;
+    }
   }
 
   fn push_filter(&mut self, filter: Filter, important: bool) {
@@ -129,6 +171,20 @@ impl TailwindDeclarationBuilder {
   }
 
   fn finish(mut self) -> StyleDeclarationBlock {
+    if let Some(shadow) = self.shadow.take() {
+      self.push(
+        StyleDeclaration::box_shadow(Some([shadow].into())),
+        self.shadow_important,
+      );
+    }
+
+    if let Some(text_shadow) = self.text_shadow.take() {
+      self.push(
+        StyleDeclaration::text_shadow(Some([text_shadow].into())),
+        self.text_shadow_important,
+      );
+    }
+
     if let Some(grid_column) = self.grid_column.take() {
       self.push(
         StyleDeclaration::grid_column(Some(grid_column)),
@@ -492,6 +548,8 @@ pub enum TailwindProperty {
   MaxHeight(Length),
   /// `box-shadow` property.
   Shadow(BoxShadow),
+  /// `box-shadow` color override.
+  ShadowColor(ColorInput),
   /// `display` property.
   Display(Display),
   /// `object-position` property.
@@ -698,6 +756,8 @@ pub enum TailwindProperty {
   BackdropFilter(Filters),
   /// `text-shadow` property.
   TextShadow(TextShadow),
+  /// `text-shadow` color override.
+  TextShadowColor(ColorInput),
   /// `isolation` property.
   Isolation(Isolation),
   /// `mix-blend-mode` property.
@@ -964,9 +1024,8 @@ impl TailwindProperty {
       TailwindProperty::MaxHeight(max_height) => {
         push_decl!(builder, important, max_height(max_height))
       }
-      TailwindProperty::Shadow(box_shadow) => {
-        push_decl!(builder, important, box_shadow(Some([box_shadow].into())))
-      }
+      TailwindProperty::Shadow(box_shadow) => builder.set_shadow(box_shadow, important),
+      TailwindProperty::ShadowColor(color) => builder.set_shadow_color(color, important),
       TailwindProperty::Display(display) => push_decl!(builder, important, display(display)),
       TailwindProperty::OverflowX(overflow) => push_decl!(builder, important, overflow_x(overflow)),
       TailwindProperty::OverflowY(overflow) => push_decl!(builder, important, overflow_y(overflow)),
@@ -1413,9 +1472,8 @@ impl TailwindProperty {
           builder.push_backdrop_filter(filter, important);
         }
       }
-      TailwindProperty::TextShadow(text_shadow) => {
-        push_decl!(builder, important, text_shadow(Some([text_shadow].into())))
-      }
+      TailwindProperty::TextShadow(text_shadow) => builder.set_text_shadow(text_shadow, important),
+      TailwindProperty::TextShadowColor(color) => builder.set_text_shadow_color(color, important),
       TailwindProperty::Visibility(visibility) => {
         push_decl!(builder, important, visibility(visibility))
       }
@@ -1548,6 +1606,26 @@ mod tests {
         0,
         (0.3_f32 * 255.0).round() as u8
       ]))))
+    );
+  }
+
+  #[test]
+  fn test_parse_shadow_color() {
+    assert_eq!(
+      TailwindProperty::parse("shadow-red-500"),
+      Some(TailwindProperty::ShadowColor(ColorInput::Value(Color([
+        239, 68, 68, 255
+      ]))))
+    );
+  }
+
+  #[test]
+  fn test_parse_text_shadow_color() {
+    assert_eq!(
+      TailwindProperty::parse("text-shadow-red-500"),
+      Some(TailwindProperty::TextShadowColor(ColorInput::Value(Color(
+        [239, 68, 68, 255]
+      ))))
     );
   }
 
@@ -2100,5 +2178,62 @@ mod tests {
         .into()
       )
     );
+  }
+
+  #[test]
+  fn test_shadow_color_overrides_shadow_preset_in_any_order() {
+    let viewport = (100, 100).into();
+
+    for classes in ["shadow-md shadow-red-500", "shadow-red-500 shadow-md"] {
+      let Ok(values) = TailwindValues::from_str(classes) else {
+        unreachable!()
+      };
+      let style =
+        Style::from(values.into_declaration_block(viewport)).inherit(&ComputedStyle::default());
+
+      assert_eq!(
+        style.box_shadow,
+        Some(
+          [BoxShadow {
+            inset: false,
+            offset_x: Length::Px(1.0),
+            offset_y: Length::Px(1.0),
+            blur_radius: Length::Px(3.0),
+            spread_radius: Length::Px(0.0),
+            color: ColorInput::Value(Color([239, 68, 68, 255])),
+          }]
+          .into()
+        )
+      );
+    }
+  }
+
+  #[test]
+  fn test_text_shadow_color_overrides_preset_in_any_order() {
+    let viewport = (100, 100).into();
+
+    for classes in [
+      "text-shadow-sm text-shadow-red-500",
+      "text-shadow-red-500 text-shadow-sm",
+    ] {
+      let Ok(values) = TailwindValues::from_str(classes) else {
+        unreachable!()
+      };
+      let style =
+        Style::from(values.into_declaration_block(viewport)).inherit(&ComputedStyle::default());
+
+      assert_eq!(
+        style.text_shadow,
+        Some(
+          [TextShadow {
+            offset_x: Length::Px(0.0),
+            offset_y: Length::Px(1.0),
+            blur_radius: Length::Px(2.0),
+            color: ColorInput::Value(Color([239, 68, 68, 255])),
+          }]
+          .into()
+        )
+      );
+    }
   }
 }
