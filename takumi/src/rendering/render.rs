@@ -18,8 +18,8 @@ use crate::{
     },
     node::Node,
     style::{
-      Affine, ComputedStyle, Filter, ImageScalingAlgorithm, SpacePair, apply_backdrop_filter,
-      apply_filters,
+      Affine, ComputedStyle, Filter, ImageScalingAlgorithm, KeyframesRule, SpacePair,
+      apply_backdrop_filter, apply_filters,
     },
     tree::{LayoutResults, LayoutTree, RenderNode},
   },
@@ -50,6 +50,9 @@ pub struct RenderOptions<'g, N: Node<N>> {
   /// CSS stylesheets to apply before layout/rendering.
   #[builder(default)]
   pub(crate) stylesheets: Vec<String>,
+  /// Structured keyframes to register alongside stylesheets.
+  #[builder(default)]
+  pub(crate) keyframes: Vec<KeyframesRule>,
   /// Global animation time in milliseconds.
   #[builder(default)]
   pub(crate) time_ms: u64,
@@ -129,29 +132,32 @@ struct RenderExit {
 
 /// Measures the layout of a node.
 pub fn measure_layout<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<MeasuredNode> {
+  let RenderOptions {
+    viewport,
+    global,
+    node,
+    draw_debug_border,
+    fetched_resources,
+    stylesheets,
+    keyframes,
+    time_ms,
+    dithering: _,
+  } = options;
   #[cfg(feature = "css_stylesheet_parsing")]
-  let parsed_stylesheets = StyleSheet::parse_list(options.stylesheets.iter().map(String::as_str));
+  let parsed_stylesheets = build_stylesheets(stylesheets, keyframes);
   #[cfg(feature = "css_stylesheet_parsing")]
   let mut render_context = RenderContext::new(
-    options.global,
-    options.viewport,
-    options.fetched_resources,
+    global,
+    viewport,
+    fetched_resources,
     parsed_stylesheets,
-    RenderTime {
-      time_ms: options.time_ms,
-    },
+    RenderTime { time_ms },
   );
   #[cfg(not(feature = "css_stylesheet_parsing"))]
-  let mut render_context = RenderContext::new(
-    options.global,
-    options.viewport,
-    options.fetched_resources,
-    RenderTime {
-      time_ms: options.time_ms,
-    },
-  );
-  render_context.draw_debug_border = options.draw_debug_border;
-  let mut root = RenderNode::from_node(&render_context, options.node);
+  let mut render_context =
+    RenderContext::new(global, viewport, fetched_resources, RenderTime { time_ms });
+  render_context.draw_debug_border = draw_debug_border;
+  let mut root = RenderNode::from_node(&render_context, node);
   let mut tree = LayoutTree::from_render_node(&root);
   tree.compute_layout(render_context.sizing.viewport.into());
   let layout_results = tree.into_results();
@@ -162,8 +168,8 @@ pub fn measure_layout<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<M
     layout_results.root_node_id(),
     Affine::IDENTITY,
     Size {
-      width: options.viewport.width.map(|value| value as f32),
-      height: options.viewport.height.map(|value| value as f32),
+      width: viewport.width.map(|value| value as f32),
+      height: viewport.height.map(|value| value as f32),
     },
   )
 }
@@ -381,32 +387,33 @@ fn create_measured_node(
 
 /// Renders a node to an image.
 pub fn render<'g, N: Node<N>>(options: RenderOptions<'g, N>) -> Result<RgbaImage> {
-  let dithering = options.dithering;
-  let viewport = options.viewport;
+  let RenderOptions {
+    viewport,
+    global,
+    node,
+    draw_debug_border,
+    fetched_resources,
+    stylesheets,
+    keyframes,
+    time_ms,
+    dithering,
+  } = options;
   #[cfg(feature = "css_stylesheet_parsing")]
-  let parsed_stylesheets = StyleSheet::parse_list(options.stylesheets.iter().map(String::as_str));
+  let parsed_stylesheets = build_stylesheets(stylesheets, keyframes);
   #[cfg(feature = "css_stylesheet_parsing")]
   let mut render_context = RenderContext::new(
-    options.global,
+    global,
     viewport,
-    options.fetched_resources,
+    fetched_resources,
     parsed_stylesheets,
-    RenderTime {
-      time_ms: options.time_ms,
-    },
+    RenderTime { time_ms },
   );
   #[cfg(not(feature = "css_stylesheet_parsing"))]
-  let mut render_context = RenderContext::new(
-    options.global,
-    viewport,
-    options.fetched_resources,
-    RenderTime {
-      time_ms: options.time_ms,
-    },
-  );
-  render_context.draw_debug_border = options.draw_debug_border;
+  let mut render_context =
+    RenderContext::new(global, viewport, fetched_resources, RenderTime { time_ms });
+  render_context.draw_debug_border = draw_debug_border;
 
-  let mut root = RenderNode::from_node(&render_context, options.node);
+  let mut root = RenderNode::from_node(&render_context, node);
   let mut tree = LayoutTree::from_render_node(&root);
   tree.compute_layout(render_context.sizing.viewport.into());
   let layout_results = tree.into_results();
@@ -803,6 +810,19 @@ pub(crate) fn render_node<'g, Nodes: Node<Nodes>>(
   Ok(())
 }
 
+#[cfg(feature = "css_stylesheet_parsing")]
+fn build_stylesheets(stylesheets: Vec<String>, keyframes: Vec<KeyframesRule>) -> Vec<StyleSheet> {
+  let mut parsed: Vec<StyleSheet> =
+    StyleSheet::parse_list(stylesheets.iter().map(String::as_str)).collect();
+  if !keyframes.is_empty() {
+    parsed.push(StyleSheet {
+      rules: Vec::new(),
+      keyframes,
+    });
+  }
+  parsed
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
@@ -814,7 +834,13 @@ mod tests {
     layout::{
       Viewport,
       node::{ContainerNode, NodeKind},
+      style::{
+        AnimationDurations, AnimationFillMode, AnimationFillModes, AnimationNames, AnimationTime,
+        AnimationTimingFunction, AnimationTimingFunctions, KeyframeRule, KeyframesRule, Length::Px,
+        Style, StyleDeclaration,
+      },
     },
+    rendering::measure_layout,
   };
 
   fn make_scene<'g>(global: &'g GlobalContext, duration_ms: u32) -> SequentialScene<'g, NodeKind> {
@@ -909,5 +935,71 @@ mod tests {
         .sum::<u64>(),
       150
     );
+  }
+
+  #[test]
+  fn measure_layout_supports_structured_keyframes() {
+    let global = GlobalContext::default();
+    let node: NodeKind = ContainerNode {
+      class_name: None,
+      id: None,
+      tag_name: Some("div".into()),
+      preset: None,
+      style: Some(
+        Style::default()
+          .with(StyleDeclaration::width(Px(100.0)))
+          .with(StyleDeclaration::animation_name(AnimationNames(
+            vec!["grow".to_string()].into(),
+          )))
+          .with(StyleDeclaration::animation_duration(AnimationDurations(
+            vec![AnimationTime::from_milliseconds(1000.0)].into(),
+          )))
+          .with(StyleDeclaration::animation_timing_function(
+            AnimationTimingFunctions(vec![AnimationTimingFunction::Linear].into()),
+          ))
+          .with(StyleDeclaration::animation_fill_mode(AnimationFillModes(
+            vec![AnimationFillMode::Both].into(),
+          ))),
+      ),
+      children: None,
+      tw: None,
+    }
+    .into();
+
+    let options_result = RenderOptionsBuilder::default()
+      .global(&global)
+      .viewport(Viewport::new(Some(200), Some(100)))
+      .node(node)
+      .keyframes(vec![KeyframesRule {
+        name: "grow".to_string(),
+        keyframes: vec![
+          KeyframeRule {
+            offsets: vec![0.0],
+            declarations: Style::default()
+              .with(StyleDeclaration::width(Px(100.0)))
+              .into(),
+          },
+          KeyframeRule {
+            offsets: vec![1.0],
+            declarations: Style::default()
+              .with(StyleDeclaration::width(Px(200.0)))
+              .into(),
+          },
+        ],
+      }])
+      .time_ms(500)
+      .build();
+    assert!(options_result.is_ok());
+    let Ok(options) = options_result else {
+      unreachable!()
+    };
+
+    let layout_result = measure_layout(options);
+    assert!(layout_result.is_ok());
+    let Ok(layout) = layout_result else {
+      unreachable!()
+    };
+
+    assert_eq!(layout.width, 150.0);
   }
 }

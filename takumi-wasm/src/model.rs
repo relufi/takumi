@@ -3,8 +3,10 @@
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
 use std::sync::Arc;
-use takumi::layout::node::NodeKind;
-use takumi::rendering::DitheringAlgorithm;
+use takumi::{
+  keyframes::deserialize_optional_keyframes, layout::node::NodeKind, layout::style::KeyframesRule,
+  rendering::DitheringAlgorithm,
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -12,6 +14,8 @@ const TS_APPEND_CONTENT: &'static str = r#"
 export type AnyNode = { type: string; [key: string]: any };
 
 export type ByteBuf = Uint8Array | ArrayBuffer | Buffer;
+
+export type Keyframes = Record<string, Record<string, Record<string, unknown>>>;
 
 export type RenderOptions = {
   /**
@@ -39,6 +43,10 @@ export type RenderOptions = {
    * CSS stylesheets to apply before rendering.
    */
   stylesheets?: string[],
+  /**
+   * Structured keyframes to register alongside stylesheets.
+   */
+  keyframes?: KeyframesRule[] | Keyframes,
   /**
    * Whether to draw debug borders.
    */
@@ -122,6 +130,16 @@ export type FontDetails = {
 export type ImageSource = {
   src: string,
   data: ByteBuf,
+};
+
+export type KeyframeRule = {
+  offsets: number[],
+  declarations: Record<string, unknown>,
+};
+
+export type KeyframesRule = {
+  name: string,
+  keyframes: KeyframeRule[],
 };
 
 export type Font = FontDetails | ByteBuf;
@@ -228,6 +246,9 @@ pub struct RenderOptions {
   pub fetched_resources: Option<Vec<ImageSource>>,
   /// CSS stylesheets to apply before rendering.
   pub stylesheets: Option<Vec<String>>,
+  /// Structured keyframes to register alongside stylesheets.
+  #[serde(default, deserialize_with = "deserialize_optional_keyframes")]
+  pub(crate) keyframes: Option<Vec<KeyframesRule>>,
   /// Whether to draw debug borders around layout elements.
   pub draw_debug_border: Option<bool>,
   /// The device pixel ratio for scaling.

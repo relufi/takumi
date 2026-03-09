@@ -9,7 +9,8 @@ use std::{
   fmt::{self, Write},
 };
 
-use crate::layout::style::StyleDeclarationBlock;
+use crate::keyframes::{KeyframePreludeParseError, parse_keyframe_prelude};
+use crate::layout::style::{KeyframeRule, KeyframesRule, StyleDeclarationBlock};
 
 #[derive(Debug, Clone)]
 pub enum CssSelectorParseError<'i> {
@@ -32,6 +33,12 @@ impl<'i> From<SelectorParseErrorKind<'i>> for CssSelectorParseError<'i> {
 impl<'i> From<Cow<'i, str>> for CssSelectorParseError<'i> {
   fn from(err: Cow<'i, str>) -> Self {
     CssSelectorParseError::Property(err)
+  }
+}
+
+impl<'i> From<KeyframePreludeParseError<'i>> for CssSelectorParseError<'i> {
+  fn from(_err: KeyframePreludeParseError<'i>) -> Self {
+    Self::Basic(BasicParseErrorKind::QualifiedRuleInvalid)
   }
 }
 
@@ -226,18 +233,6 @@ impl<'i> RuleBodyItemParser<'i, StyleDeclarationBlock, CssSelectorParseError<'i>
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct KeyframeRule {
-  pub offsets: Vec<f32>,
-  pub declarations: StyleDeclarationBlock,
-}
-
-#[derive(Debug, Clone)]
-pub struct KeyframesRule {
-  pub name: String,
-  pub keyframes: Vec<KeyframeRule>,
-}
-
 struct KeyframeDeclarationParser;
 
 impl<'i> DeclarationParser<'i> for KeyframeDeclarationParser {
@@ -291,16 +286,7 @@ impl<'i> QualifiedRuleParser<'i> for KeyframeRuleParser {
     &mut self,
     input: &mut Parser<'i, 't>,
   ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
-    let mut offsets = Vec::new();
-
-    loop {
-      offsets.push(parse_keyframe_offset(input)?);
-      if input.try_parse(Parser::expect_comma).is_err() {
-        break;
-      }
-    }
-
-    Ok(offsets)
+    parse_keyframe_prelude(input)
   }
 
   fn parse_block<'t>(
@@ -327,36 +313,6 @@ impl<'i> AtRuleParser<'i> for KeyframeRuleParser {
   type Prelude = ();
   type AtRule = KeyframeRule;
   type Error = CssSelectorParseError<'i>;
-}
-
-fn parse_keyframe_offset<'i>(
-  input: &mut Parser<'i, '_>,
-) -> Result<f32, ParseError<'i, CssSelectorParseError<'i>>> {
-  if input
-    .try_parse(|parser| parser.expect_ident_matching("from"))
-    .is_ok()
-  {
-    return Ok(0.0);
-  }
-
-  if input
-    .try_parse(|parser| parser.expect_ident_matching("to"))
-    .is_ok()
-  {
-    return Ok(1.0);
-  }
-
-  let token = input.next()?;
-  let Token::Percentage { unit_value, .. } = token else {
-    return Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid));
-  };
-
-  let offset = *unit_value;
-  if !(0.0..=1.0).contains(&offset) {
-    return Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid));
-  }
-
-  Ok(offset)
 }
 
 pub struct TakumiRuleParser;

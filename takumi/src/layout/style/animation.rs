@@ -1,16 +1,39 @@
 #[cfg(feature = "css_stylesheet_parsing")]
+use std::borrow::Cow;
+
+#[cfg(feature = "css_stylesheet_parsing")]
 use parley::{FontFeature, FontVariation};
 #[cfg(feature = "css_stylesheet_parsing")]
 use std::cmp::Ordering;
 
+use super::StyleDeclarationBlock;
+use serde::Deserialize;
+
 #[cfg(feature = "css_stylesheet_parsing")]
 use crate::{
-  layout::style::{
-    selector::{KeyframeRule, KeyframesRule, StyleSheet},
-    *,
-  },
+  layout::style::{selector::StyleSheet, *},
   rendering::{RenderContext, Sizing},
 };
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+/// A single structured keyframe rule.
+pub struct KeyframeRule {
+  /// Keyframe offsets as values between 0.0 and 1.0.
+  pub offsets: Vec<f32>,
+  /// Declarations applied at this step.
+  pub declarations: StyleDeclarationBlock,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+/// Structured keyframes that can be passed directly in render options.
+pub struct KeyframesRule {
+  /// Animation name matched by `animation-name`.
+  pub name: String,
+  /// Individual keyframe rules for this animation.
+  pub keyframes: Vec<KeyframeRule>,
+}
 
 #[cfg(feature = "css_stylesheet_parsing")]
 pub(crate) fn apply_stylesheet_animations(
@@ -56,7 +79,7 @@ pub(crate) fn apply_stylesheet_animations(
       continue;
     };
 
-    let resolved_frames = resolve_keyframes(keyframes, &base_snapshot);
+    let resolved_frames = resolve_keyframes(&keyframes, &base_snapshot);
     let Some(segment) = sample_keyframe_segment(&resolved_frames, &base_snapshot, progress) else {
       continue;
     };
@@ -84,14 +107,98 @@ pub(crate) fn apply_stylesheet_animations(
 }
 
 #[cfg(feature = "css_stylesheet_parsing")]
-fn find_keyframes<'a>(stylesheets: &'a [StyleSheet], name: &str) -> Option<&'a KeyframesRule> {
-  stylesheets.iter().rev().find_map(|sheet| {
-    sheet
-      .keyframes
-      .iter()
-      .rev()
-      .find(|rule| rule.name.eq_ignore_ascii_case(name))
-  })
+fn find_keyframes<'a>(stylesheets: &'a [StyleSheet], name: &str) -> Option<Cow<'a, KeyframesRule>> {
+  stylesheets
+    .iter()
+    .rev()
+    .find_map(|sheet| {
+      sheet
+        .keyframes
+        .iter()
+        .rev()
+        .find(|rule| rule.name.eq_ignore_ascii_case(name))
+    })
+    .map(Cow::Borrowed)
+    .or_else(|| tailwind_animation_keyframes(name).map(Cow::Owned))
+}
+
+fn tailwind_animation_keyframes(name: &str) -> Option<KeyframesRule> {
+  match name.to_ascii_lowercase().as_str() {
+    "spin" => Some(KeyframesRule {
+      name: "spin".to_string(),
+      keyframes: vec![
+        keyframe(0.25, [StyleDeclaration::rotate(Some(Angle::new(90.0)))]),
+        keyframe(0.5, [StyleDeclaration::rotate(Some(Angle::new(180.0)))]),
+        keyframe(0.75, [StyleDeclaration::rotate(Some(Angle::new(270.0)))]),
+        keyframe(1.0, [StyleDeclaration::rotate(Some(Angle::new(359.999)))]),
+      ],
+    }),
+    "ping" => Some(KeyframesRule {
+      name: "ping".to_string(),
+      keyframes: vec![
+        keyframe(
+          0.75,
+          [
+            StyleDeclaration::scale(SpacePair::from_single(PercentageNumber(2.0))),
+            StyleDeclaration::opacity(PercentageNumber(0.0)),
+          ],
+        ),
+        keyframe(
+          1.0,
+          [
+            StyleDeclaration::scale(SpacePair::from_single(PercentageNumber(2.0))),
+            StyleDeclaration::opacity(PercentageNumber(0.0)),
+          ],
+        ),
+      ],
+    }),
+    "pulse" => Some(KeyframesRule {
+      name: "pulse".to_string(),
+      keyframes: vec![keyframe(
+        0.5,
+        [StyleDeclaration::opacity(PercentageNumber(0.5))],
+      )],
+    }),
+    "bounce" => Some(KeyframesRule {
+      name: "bounce".to_string(),
+      keyframes: vec![
+        keyframe(
+          0.0,
+          [StyleDeclaration::translate(SpacePair::from_pair(
+            Length::Px(0.0),
+            Length::Percentage(-25.0),
+          ))],
+        ),
+        keyframe(
+          0.5,
+          [StyleDeclaration::translate(SpacePair::from_pair(
+            Length::Px(0.0),
+            Length::Percentage(0.0),
+          ))],
+        ),
+        keyframe(
+          1.0,
+          [StyleDeclaration::translate(SpacePair::from_pair(
+            Length::Px(0.0),
+            Length::Percentage(-25.0),
+          ))],
+        ),
+      ],
+    }),
+    _ => None,
+  }
+}
+
+fn keyframe<const N: usize>(offset: f32, declarations: [StyleDeclaration; N]) -> KeyframeRule {
+  let mut block = StyleDeclarationBlock::default();
+  for declaration in declarations {
+    block.push(declaration, false);
+  }
+
+  KeyframeRule {
+    offsets: vec![offset],
+    declarations: block,
+  }
 }
 
 #[cfg(feature = "css_stylesheet_parsing")]
@@ -987,6 +1094,14 @@ mod tests {
     );
 
     assert_eq!(progress, Some(1.0));
+  }
+
+  #[test]
+  fn tailwind_animation_presets_include_built_in_keyframes() {
+    assert!(super::tailwind_animation_keyframes("spin").is_some());
+    assert!(super::tailwind_animation_keyframes("ping").is_some());
+    assert!(super::tailwind_animation_keyframes("pulse").is_some());
+    assert!(super::tailwind_animation_keyframes("bounce").is_some());
   }
 
   #[test]

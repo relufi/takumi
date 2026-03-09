@@ -8,7 +8,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use takumi::{
   GlobalContext,
-  layout::node::NodeKind,
+  layout::{node::NodeKind, style::KeyframesRule as CoreKeyframesRule},
   parley::{FontWeight, GenericFamily, fontique::FontInfoOverride},
   rendering::{DitheringAlgorithm as CoreDitheringAlgorithm, ImageOutputFormat},
   resources::image::load_image_source_from_bytes,
@@ -16,7 +16,7 @@ use takumi::{
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 use crate::{
-  FontInput, buffer_from_object, buffer_slice_from_object, deserialize_with_tracing,
+  De, FontInput, buffer_from_object, buffer_slice_from_object, deserialize_with_tracing,
   encode_frames_task::EncodeFramesTask, load_font_task::LoadFontTask, map_error,
   measure_task::MeasureTask, put_persistent_image_task::PutPersistentImageTask,
   render_animation_task::RenderAnimationTask, render_task::RenderTask,
@@ -94,6 +94,17 @@ pub(crate) struct RendererState {
   pub(crate) persistent_image_cache: HashSet<ImageCacheKey, Xxh3DefaultBuilder>,
 }
 
+pub(crate) fn deserialize_keyframes(keyframes: Option<Object>) -> Result<Vec<CoreKeyframesRule>> {
+  match keyframes {
+    Some(keyframes) => {
+      let mut deserializer = De::new(&keyframes);
+      takumi::keyframes::deserialize_keyframes(&mut deserializer)
+        .map_err(|error: napi::Error| Error::from_reason(error.to_string()))
+    }
+    None => Ok(Vec::new()),
+  }
+}
+
 /// Options for rendering an image.
 #[napi(object)]
 #[derive(Default)]
@@ -112,6 +123,11 @@ pub struct RenderOptions<'env> {
   pub fetched_resources: Option<Vec<ImageSource<'env>>>,
   /// CSS stylesheets to apply before rendering.
   pub stylesheets: Option<Vec<String>>,
+  /// Structured keyframes to register alongside stylesheets.
+  #[napi(
+    ts_type = "{ name: string; keyframes: { offsets: number[]; declarations: Record<string, unknown> }[] }[] | Keyframes"
+  )]
+  pub keyframes: Option<Object<'env>>,
   /// The device pixel ratio.
   /// @default 1.0
   pub device_pixel_ratio: Option<f64>,
