@@ -982,7 +982,9 @@ mod tests {
       "#,
     );
 
-    let media = sheet.rules[0].media_queries.as_ref().unwrap();
+    let Some(media) = sheet.rules[0].media_queries.as_ref() else {
+      unreachable!("expected media queries on parsed rule");
+    };
     assert!(media.matches(Viewport::new(Some(400), Some(800))));
     assert!(media.matches(Viewport::new(Some(1280), Some(800))));
     assert!(!media.matches(Viewport::new(Some(800), Some(800))));
