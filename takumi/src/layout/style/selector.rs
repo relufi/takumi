@@ -7,6 +7,7 @@ use selectors::parser::{
 use std::{
   borrow::Cow,
   fmt::{self, Write},
+  mem::take,
   rc::Rc,
 };
 use taffy::Size;
@@ -30,6 +31,8 @@ pub enum CssSelectorParseError<'i> {
   Selector(SelectorParseErrorKind<'i>),
   #[allow(dead_code)]
   UnsupportedSelectorFeature(&'static str),
+  #[allow(dead_code)]
+  InvalidAtRule(&'static str),
 }
 
 impl<'i> From<SelectorParseErrorKind<'i>> for CssSelectorParseError<'i> {
@@ -49,6 +52,23 @@ impl<'i> From<KeyframePreludeParseError<'i>> for CssSelectorParseError<'i> {
     Self::Basic(BasicParseErrorKind::QualifiedRuleInvalid)
   }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PropertyRule {
+  pub name: String,
+  pub syntax: String,
+  pub inherits: bool,
+  pub initial_value: Option<String>,
+  pub media_queries: Vec<MediaQueryList>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum LayerName {
+  Named(String),
+  Anonymous,
+}
+
+type LayerPath = Vec<LayerName>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TakumiIdent(pub String);
@@ -155,6 +175,47 @@ struct TakumiSelectorParser;
 impl<'i> selectors::Parser<'i> for TakumiSelectorParser {
   type Impl = TakumiSelectorImpl;
   type Error = CssSelectorParseError<'i>;
+
+  fn parse_parent_selector(&self) -> bool {
+    true
+  }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedSelectors {
+  selectors: SelectorList<TakumiSelectorImpl>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct StyleSheetFragment {
+  rules: Vec<CssRule>,
+  keyframes: Vec<KeyframesRule>,
+  property_rules: Vec<PropertyRule>,
+  declared_layers: Vec<LayerPath>,
+}
+
+impl StyleSheetFragment {
+  fn extend(&mut self, other: Self) {
+    self.rules.extend(other.rules);
+    self.keyframes.extend(other.keyframes);
+    self.property_rules.extend(other.property_rules);
+    self.declared_layers.extend(other.declared_layers);
+  }
+}
+
+#[derive(Debug)]
+enum StyleRuleBodyItem {
+  Declarations(Box<StyleDeclarationBlock>),
+  Rules(Vec<CssRule>),
+}
+
+fn parse_selector_list<'i, 't>(
+  input: &mut Parser<'i, 't>,
+  parse_relative: ParseRelative,
+) -> Result<SelectorList<TakumiSelectorImpl>, ParseError<'i, CssSelectorParseError<'i>>> {
+  let selectors = SelectorList::parse(&TakumiSelectorParser, input, parse_relative)?;
+  ensure_supported_selector_list(&selectors).map_err(|err| input.new_custom_error(err))?;
+  Ok(selectors)
 }
 
 fn selector_contains_unsupported_features(selector: &Selector<TakumiSelectorImpl>) -> bool {
@@ -234,6 +295,138 @@ impl<'i> RuleBodyItemParser<'i, StyleDeclarationBlock, CssSelectorParseError<'i>
   fn parse_qualified(&self) -> bool {
     false
   }
+  fn parse_declarations(&self) -> bool {
+    true
+  }
+}
+
+struct PropertyRuleDeclarationParser;
+
+impl<'i> DeclarationParser<'i> for PropertyRuleDeclarationParser {
+  type Declaration = (String, String);
+  type Error = CssSelectorParseError<'i>;
+
+  fn parse_value<'t>(
+    &mut self,
+    name: CowRcStr<'i>,
+    input: &mut Parser<'i, 't>,
+    _state: &ParserState,
+  ) -> Result<Self::Declaration, ParseError<'i, Self::Error>> {
+    let start = input.position();
+    while input.next_including_whitespace_and_comments().is_ok() {}
+    Ok((name.to_string(), input.slice_from(start).trim().to_owned()))
+  }
+}
+
+impl<'i> QualifiedRuleParser<'i> for PropertyRuleDeclarationParser {
+  type Prelude = ();
+  type QualifiedRule = (String, String);
+  type Error = CssSelectorParseError<'i>;
+}
+
+impl<'i> AtRuleParser<'i> for PropertyRuleDeclarationParser {
+  type Prelude = ();
+  type AtRule = (String, String);
+  type Error = CssSelectorParseError<'i>;
+}
+
+impl<'i> RuleBodyItemParser<'i, (String, String), CssSelectorParseError<'i>>
+  for PropertyRuleDeclarationParser
+{
+  fn parse_qualified(&self) -> bool {
+    false
+  }
+
+  fn parse_declarations(&self) -> bool {
+    true
+  }
+}
+
+struct NestedStyleRuleParser<'a> {
+  parent_selectors: SelectorList<TakumiSelectorImpl>,
+  media_queries: &'a [MediaQueryList],
+  layer: Option<LayerPath>,
+}
+
+impl<'i> DeclarationParser<'i> for NestedStyleRuleParser<'_> {
+  type Declaration = StyleRuleBodyItem;
+  type Error = CssSelectorParseError<'i>;
+
+  fn parse_value<'t>(
+    &mut self,
+    name: CowRcStr<'i>,
+    input: &mut Parser<'i, 't>,
+    state: &ParserState,
+  ) -> Result<Self::Declaration, ParseError<'i, Self::Error>> {
+    let mut parser = StyleDeclarationParser;
+    parser
+      .parse_value(name, input, state)
+      .map(Box::new)
+      .map(StyleRuleBodyItem::Declarations)
+  }
+}
+
+impl<'i> QualifiedRuleParser<'i> for NestedStyleRuleParser<'_> {
+  type Prelude = SelectorList<TakumiSelectorImpl>;
+  type QualifiedRule = StyleRuleBodyItem;
+  type Error = CssSelectorParseError<'i>;
+
+  fn parse_prelude<'t>(
+    &mut self,
+    input: &mut Parser<'i, 't>,
+  ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
+    parse_selector_list(input, ParseRelative::ForNesting)
+  }
+
+  fn parse_block<'t>(
+    &mut self,
+    nested_selectors: Self::Prelude,
+    _location: &ParserState,
+    input: &mut Parser<'i, 't>,
+  ) -> Result<Self::QualifiedRule, ParseError<'i, Self::Error>> {
+    let selectors = nested_selectors.replace_parent_selector(&self.parent_selectors);
+    let rules = parse_style_rule_block(selectors, self.media_queries, self.layer.as_ref(), input)?;
+    Ok(StyleRuleBodyItem::Rules(rules))
+  }
+}
+
+impl<'i> AtRuleParser<'i> for NestedStyleRuleParser<'_> {
+  type Prelude = AtRulePrelude;
+  type AtRule = StyleRuleBodyItem;
+  type Error = CssSelectorParseError<'i>;
+
+  fn parse_prelude<'t>(
+    &mut self,
+    name: CowRcStr<'i>,
+    input: &mut Parser<'i, 't>,
+  ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
+    parse_at_rule_prelude(name, input)
+  }
+
+  fn parse_block<'t>(
+    &mut self,
+    prelude: Self::Prelude,
+    _location: &ParserState,
+    input: &mut Parser<'i, 't>,
+  ) -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
+    let rules = parse_nested_at_rule_block(
+      &self.parent_selectors,
+      self.media_queries,
+      self.layer.as_ref(),
+      prelude,
+      input,
+    )?;
+    Ok(StyleRuleBodyItem::Rules(rules))
+  }
+}
+
+impl<'i> RuleBodyItemParser<'i, StyleRuleBodyItem, CssSelectorParseError<'i>>
+  for NestedStyleRuleParser<'_>
+{
+  fn parse_qualified(&self) -> bool {
+    true
+  }
+
   fn parse_declarations(&self) -> bool {
     true
   }
@@ -321,7 +514,9 @@ impl<'i> AtRuleParser<'i> for KeyframeRuleParser {
   type Error = CssSelectorParseError<'i>;
 }
 
-struct TakumiRuleParser;
+struct TakumiRuleParser {
+  current_layer: Option<LayerPath>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum MediaType {
@@ -582,7 +777,25 @@ fn parse_media_feature<'i, 't>(
 #[derive(Debug, Clone)]
 enum AtRulePrelude {
   Keyframes(String),
+  Layer(Vec<LayerPath>),
   Media(MediaQueryList),
+  Property(String),
+  Supports(bool),
+}
+
+fn parse_fragment(
+  input: &mut Parser<'_, '_>,
+  current_layer: Option<&LayerPath>,
+) -> StyleSheetFragment {
+  let mut parser = TakumiRuleParser {
+    current_layer: current_layer.cloned(),
+  };
+  StyleSheetParser::new(input, &mut parser)
+    .filter_map(Result::ok)
+    .fold(StyleSheetFragment::default(), |mut fragment, nested| {
+      fragment.extend(nested);
+      fragment
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -590,28 +803,369 @@ pub struct CssRule {
   pub selectors: SelectorList<TakumiSelectorImpl>,
   pub normal_declarations: StyleDeclarationBlock,
   pub important_declarations: StyleDeclarationBlock,
-  pub media_queries: Option<MediaQueryList>,
+  pub media_queries: Vec<MediaQueryList>,
+  pub layer: Option<LayerPath>,
+  pub layer_order: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
-pub enum StyleSheetRule {
-  Style(Box<CssRule>),
-  Media(Vec<CssRule>),
-  Keyframes(KeyframesRule),
+fn parse_property_rule<'i, 't>(
+  property_name: String,
+  input: &mut Parser<'i, 't>,
+) -> Result<PropertyRule, ParseError<'i, CssSelectorParseError<'i>>> {
+  let mut parser = PropertyRuleDeclarationParser;
+  let mut syntax = None;
+  let mut inherits = None;
+  let mut initial_value = None;
+
+  for entry in RuleBodyParser::new(input, &mut parser).filter_map(Result::ok) {
+    let (name, value) = entry;
+    if name.eq_ignore_ascii_case("syntax") {
+      syntax = Some(value);
+      continue;
+    }
+
+    if name.eq_ignore_ascii_case("inherits") {
+      if value.eq_ignore_ascii_case("true") {
+        inherits = Some(true);
+        continue;
+      }
+
+      if value.eq_ignore_ascii_case("false") {
+        inherits = Some(false);
+        continue;
+      }
+
+      return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+        "@property inherits must be true or false",
+      )));
+    }
+
+    if name.eq_ignore_ascii_case("initial-value") {
+      initial_value = Some(value);
+    }
+  }
+
+  let Some(syntax) = syntax else {
+    return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+      "missing `@property` syntax",
+    )));
+  };
+  let Some(inherits) = inherits else {
+    return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+      "missing `@property` inherits",
+    )));
+  };
+
+  Ok(PropertyRule {
+    name: property_name,
+    syntax,
+    inherits,
+    initial_value,
+    media_queries: Vec::new(),
+  })
+}
+
+fn supports_declaration<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<bool, ParseError<'i, CssSelectorParseError<'i>>> {
+  let name = input.expect_ident_cloned()?;
+  input.expect_colon()?;
+  let declaration = StyleDeclarationBlock::parse(&name, input).map_err(ParseError::into)?;
+  Ok(!declaration.declarations.is_empty() && input.is_exhausted())
+}
+
+fn parse_supports_in_parens<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<bool, ParseError<'i, CssSelectorParseError<'i>>> {
+  let location = input.current_source_location();
+  match input.next()? {
+    Token::ParenthesisBlock => input.parse_nested_block(|input| {
+      let state = input.state();
+      if let Ok(result) = parse_supports_condition(input)
+        && input.is_exhausted()
+      {
+        return Ok(result);
+      }
+
+      input.reset(&state);
+      supports_declaration(input)
+    }),
+    token => Err(location.new_unexpected_token_error(token.clone())),
+  }
+}
+
+fn parse_supports_not<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<bool, ParseError<'i, CssSelectorParseError<'i>>> {
+  if input
+    .try_parse(|input| input.expect_ident_matching("not"))
+    .is_ok()
+  {
+    return Ok(!parse_supports_not(input)?);
+  }
+
+  parse_supports_in_parens(input)
+}
+
+fn parse_supports_condition<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<bool, ParseError<'i, CssSelectorParseError<'i>>> {
+  let mut result = parse_supports_not(input)?;
+  let mut operator = None;
+
+  loop {
+    if input
+      .try_parse(|input| input.expect_ident_matching("and"))
+      .is_ok()
+    {
+      if matches!(operator, Some(false)) {
+        return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+          "@supports cannot mix `and` and `or` without parentheses",
+        )));
+      }
+      operator = Some(true);
+      result &= parse_supports_not(input)?;
+      continue;
+    }
+
+    if input
+      .try_parse(|input| input.expect_ident_matching("or"))
+      .is_ok()
+    {
+      if matches!(operator, Some(true)) {
+        return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+          "@supports cannot mix `and` and `or` without parentheses",
+        )));
+      }
+      operator = Some(false);
+      result |= parse_supports_not(input)?;
+      continue;
+    }
+
+    break;
+  }
+
+  Ok(result)
+}
+
+fn parse_at_rule_prelude<'i, 't>(
+  name: CowRcStr<'i>,
+  input: &mut Parser<'i, 't>,
+) -> Result<AtRulePrelude, ParseError<'i, CssSelectorParseError<'i>>> {
+  if name.eq_ignore_ascii_case("layer") {
+    let mut layer_names = Vec::new();
+    while let Ok(layer_name) = input.try_parse(parse_layer_name) {
+      layer_names.push(layer_name);
+      if input.try_parse(Parser::expect_comma).is_err() {
+        break;
+      }
+    }
+    if layer_names.is_empty() {
+      layer_names.push(vec![LayerName::Anonymous]);
+    }
+    return Ok(AtRulePrelude::Layer(layer_names));
+  }
+
+  if name.eq_ignore_ascii_case("keyframes") {
+    return Ok(AtRulePrelude::Keyframes(
+      input.expect_ident_or_string()?.to_string(),
+    ));
+  }
+
+  if name.eq_ignore_ascii_case("media") {
+    return parse_media_query_list(input).map(AtRulePrelude::Media);
+  }
+
+  if name.eq_ignore_ascii_case("supports") {
+    return parse_supports_condition(input).map(AtRulePrelude::Supports);
+  }
+
+  if name.eq_ignore_ascii_case("property") {
+    let property_name = input.expect_ident_or_string()?.to_string();
+    if !property_name.starts_with("--") {
+      return Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+        "@property name must be a custom property",
+      )));
+    }
+    return Ok(AtRulePrelude::Property(property_name));
+  }
+
+  Err(input.new_error(BasicParseErrorKind::AtRuleInvalid(name)))
+}
+
+fn parse_layer_name<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<LayerPath, ParseError<'i, CssSelectorParseError<'i>>> {
+  let mut segments = Vec::new();
+
+  loop {
+    let location = input.current_source_location();
+    let segment = match input.next()? {
+      Token::Ident(value) | Token::QuotedString(value) => value.to_string(),
+      token => return Err(location.new_unexpected_token_error(token.clone())),
+    };
+    segments.push(LayerName::Named(segment));
+
+    if input.try_parse(|input| input.expect_delim('.')).is_err() {
+      break;
+    }
+  }
+
+  Ok(segments)
+}
+
+fn extend_layer_name(
+  current_layer: Option<&LayerPath>,
+  layer_name: &[LayerName],
+) -> Option<LayerPath> {
+  if layer_name == [LayerName::Anonymous] {
+    let mut nested_layer = current_layer.cloned().unwrap_or_default();
+    nested_layer.push(LayerName::Anonymous);
+    return Some(nested_layer);
+  }
+
+  let mut combined = current_layer.cloned().unwrap_or_default();
+  combined.extend(layer_name.iter().cloned());
+  Some(combined)
+}
+
+fn ensure_single_layer_name<'i>(
+  layer_names: &[LayerPath],
+  input: &Parser<'i, '_>,
+) -> Result<(), ParseError<'i, CssSelectorParseError<'i>>> {
+  if layer_names.len() <= 1 {
+    return Ok(());
+  }
+
+  Err(input.new_custom_error(CssSelectorParseError::InvalidAtRule(
+    "@layer blocks accept at most one name",
+  )))
+}
+
+fn parse_style_rule_block<'i, 't>(
+  selectors: SelectorList<TakumiSelectorImpl>,
+  media_queries: &[MediaQueryList],
+  layer: Option<&LayerPath>,
+  input: &mut Parser<'i, 't>,
+) -> Result<Vec<CssRule>, ParseError<'i, CssSelectorParseError<'i>>> {
+  let mut normal_declarations = StyleDeclarationBlock::default();
+  let mut important_declarations = StyleDeclarationBlock::default();
+  let layer = layer.cloned();
+  let mut rules = Vec::new();
+  let mut parser = NestedStyleRuleParser {
+    parent_selectors: selectors.clone(),
+    media_queries,
+    layer: layer.clone(),
+  };
+
+  for result in RuleBodyParser::new(input, &mut parser) {
+    match result {
+      Ok(StyleRuleBodyItem::Declarations(declarations)) => {
+        let declarations = *declarations;
+        if declarations.importance.is_empty() {
+          normal_declarations.append(declarations);
+        } else {
+          important_declarations.append(declarations);
+        }
+      }
+      Ok(StyleRuleBodyItem::Rules(mut nested_rules)) => {
+        if !normal_declarations.declarations.is_empty()
+          || !important_declarations.declarations.is_empty()
+        {
+          rules.push(CssRule {
+            selectors: selectors.clone(),
+            normal_declarations: take(&mut normal_declarations),
+            important_declarations: take(&mut important_declarations),
+            media_queries: media_queries.to_vec(),
+            layer: layer.clone(),
+            layer_order: None,
+          });
+        }
+        rules.append(&mut nested_rules);
+      }
+      Err((_error, _body)) => continue,
+    }
+  }
+
+  if normal_declarations.declarations.is_empty() && important_declarations.declarations.is_empty() {
+    return Ok(rules);
+  }
+
+  rules.push(CssRule {
+    selectors,
+    normal_declarations,
+    important_declarations,
+    media_queries: media_queries.to_vec(),
+    layer,
+    layer_order: None,
+  });
+  Ok(rules)
+}
+
+fn parse_nested_at_rule_block<'i, 't>(
+  parent_selectors: &SelectorList<TakumiSelectorImpl>,
+  media_queries: &[MediaQueryList],
+  current_layer: Option<&LayerPath>,
+  prelude: AtRulePrelude,
+  input: &mut Parser<'i, 't>,
+) -> Result<Vec<CssRule>, ParseError<'i, CssSelectorParseError<'i>>> {
+  match prelude {
+    AtRulePrelude::Layer(layer_names) => {
+      ensure_single_layer_name(&layer_names, input)?;
+      let Some(layer_name) = layer_names.into_iter().next() else {
+        return Ok(Vec::new());
+      };
+      let nested_layer = extend_layer_name(current_layer, &layer_name);
+      parse_style_rule_block(
+        parent_selectors.clone(),
+        media_queries,
+        nested_layer.as_ref(),
+        input,
+      )
+    }
+    AtRulePrelude::Media(media_query) => {
+      let mut merged_media_queries = media_queries.to_vec();
+      merged_media_queries.push(media_query);
+      parse_style_rule_block(
+        parent_selectors.clone(),
+        &merged_media_queries,
+        current_layer,
+        input,
+      )
+    }
+    AtRulePrelude::Supports(true) => parse_style_rule_block(
+      parent_selectors.clone(),
+      media_queries,
+      current_layer,
+      input,
+    ),
+    AtRulePrelude::Supports(false) => {
+      let mut parser = NestedStyleRuleParser {
+        parent_selectors: parent_selectors.clone(),
+        media_queries,
+        layer: current_layer.cloned(),
+      };
+      for _ in RuleBodyParser::new(input, &mut parser) {}
+      Ok(Vec::new())
+    }
+    AtRulePrelude::Keyframes(_) | AtRulePrelude::Property(_) => Err(input.new_custom_error(
+      CssSelectorParseError::InvalidAtRule("unsupported nested at-rule"),
+    )),
+  }
 }
 
 impl<'i> QualifiedRuleParser<'i> for TakumiRuleParser {
-  type Prelude = SelectorList<TakumiSelectorImpl>;
-  type QualifiedRule = StyleSheetRule;
+  type Prelude = ParsedSelectors;
+  type QualifiedRule = StyleSheetFragment;
   type Error = CssSelectorParseError<'i>;
 
   fn parse_prelude<'t>(
     &mut self,
     input: &mut Parser<'i, 't>,
   ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
-    let selectors = SelectorList::parse(&TakumiSelectorParser, input, ParseRelative::No)?;
-    ensure_supported_selector_list(&selectors).map_err(|err| input.new_custom_error(err))?;
-    Ok(selectors)
+    Ok(ParsedSelectors {
+      selectors: parse_selector_list(input, ParseRelative::No)?,
+    })
   }
 
   fn parse_block<'t>(
@@ -620,34 +1174,16 @@ impl<'i> QualifiedRuleParser<'i> for TakumiRuleParser {
     _location: &ParserState,
     input: &mut Parser<'i, 't>,
   ) -> Result<Self::QualifiedRule, ParseError<'i, Self::Error>> {
-    let mut normal_declarations = StyleDeclarationBlock::default();
-    let mut important_declarations = StyleDeclarationBlock::default();
-    let mut decl_parser = StyleDeclarationParser;
-    let parser = RuleBodyParser::new(input, &mut decl_parser);
-    for res in parser {
-      match res {
-        Ok(declarations) => {
-          if declarations.importance.is_empty() {
-            normal_declarations.append(declarations);
-          } else {
-            important_declarations.append(declarations);
-          }
-        }
-        Err((_error, _declaration)) => continue,
-      }
-    }
-    Ok(StyleSheetRule::Style(Box::new(CssRule {
-      selectors,
-      normal_declarations,
-      important_declarations,
-      media_queries: None,
-    })))
+    Ok(StyleSheetFragment {
+      rules: parse_style_rule_block(selectors.selectors, &[], self.current_layer.as_ref(), input)?,
+      ..StyleSheetFragment::default()
+    })
   }
 }
 
 impl<'i> AtRuleParser<'i> for TakumiRuleParser {
   type Prelude = AtRulePrelude;
-  type AtRule = StyleSheetRule;
+  type AtRule = StyleSheetFragment;
   type Error = CssSelectorParseError<'i>;
 
   fn parse_prelude<'t>(
@@ -655,17 +1191,7 @@ impl<'i> AtRuleParser<'i> for TakumiRuleParser {
     name: CowRcStr<'i>,
     input: &mut Parser<'i, 't>,
   ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
-    if name.eq_ignore_ascii_case("keyframes") {
-      return Ok(AtRulePrelude::Keyframes(
-        input.expect_ident_or_string()?.to_string(),
-      ));
-    }
-
-    if name.eq_ignore_ascii_case("media") {
-      return parse_media_query_list(input).map(AtRulePrelude::Media);
-    }
-
-    Err(input.new_error(BasicParseErrorKind::AtRuleInvalid(name)))
+    parse_at_rule_prelude(name, input)
   }
 
   fn parse_block<'t>(
@@ -675,27 +1201,84 @@ impl<'i> AtRuleParser<'i> for TakumiRuleParser {
     input: &mut Parser<'i, 't>,
   ) -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
     match prelude {
+      AtRulePrelude::Layer(layer_names) => {
+        ensure_single_layer_name(&layer_names, input)?;
+        let declared_layers = layer_names
+          .iter()
+          .filter_map(|layer_name| extend_layer_name(self.current_layer.as_ref(), layer_name))
+          .collect::<Vec<_>>();
+        let Some(layer_name) = layer_names.into_iter().next() else {
+          return Ok(StyleSheetFragment {
+            declared_layers,
+            ..StyleSheetFragment::default()
+          });
+        };
+        let nested_layer = extend_layer_name(self.current_layer.as_ref(), &layer_name);
+        let mut fragment = parse_fragment(input, nested_layer.as_ref());
+        fragment.declared_layers.splice(0..0, declared_layers);
+        Ok(fragment)
+      }
       AtRulePrelude::Keyframes(name) => {
         let mut parser = KeyframeRuleParser;
         let rule_list_parser = StyleSheetParser::new(input, &mut parser);
         let keyframes = rule_list_parser.filter_map(Result::ok).collect::<Vec<_>>();
 
-        Ok(StyleSheetRule::Keyframes(KeyframesRule { name, keyframes }))
+        Ok(StyleSheetFragment {
+          keyframes: vec![KeyframesRule {
+            name,
+            keyframes,
+            media_queries: Vec::new(),
+          }],
+          ..StyleSheetFragment::default()
+        })
       }
-      AtRulePrelude::Media(media_queries) => {
-        let mut parser = TakumiRuleParser;
-        let rule_list_parser = StyleSheetParser::new(input, &mut parser);
-        let mut rules = Vec::new();
+      AtRulePrelude::Media(media_query) => {
+        let mut fragment = parse_fragment(input, self.current_layer.as_ref());
 
-        for rule in rule_list_parser.filter_map(Result::ok) {
-          if let StyleSheetRule::Style(mut rule) = rule {
-            rule.media_queries = Some(media_queries.clone());
-            rules.push(*rule);
-          }
+        for rule in &mut fragment.rules {
+          rule.media_queries.push(media_query.clone());
+        }
+        for keyframes in &mut fragment.keyframes {
+          keyframes.media_queries.push(media_query.clone());
+        }
+        for property_rule in &mut fragment.property_rules {
+          property_rule.media_queries.push(media_query.clone());
         }
 
-        Ok(StyleSheetRule::Media(rules))
+        Ok(fragment)
       }
+      AtRulePrelude::Supports(is_supported) => {
+        if !is_supported {
+          let mut parser = TakumiRuleParser {
+            current_layer: self.current_layer.clone(),
+          };
+          for _ in StyleSheetParser::new(input, &mut parser) {}
+          return Ok(StyleSheetFragment::default());
+        }
+
+        Ok(parse_fragment(input, self.current_layer.as_ref()))
+      }
+      AtRulePrelude::Property(name) => Ok(StyleSheetFragment {
+        property_rules: vec![parse_property_rule(name, input)?],
+        ..StyleSheetFragment::default()
+      }),
+    }
+  }
+
+  fn rule_without_block(
+    &mut self,
+    prelude: Self::Prelude,
+    _start: &ParserState,
+  ) -> Result<Self::AtRule, ()> {
+    match prelude {
+      AtRulePrelude::Layer(layer_names) => Ok(StyleSheetFragment {
+        declared_layers: layer_names
+          .into_iter()
+          .filter_map(|layer_name| extend_layer_name(self.current_layer.as_ref(), &layer_name))
+          .collect(),
+        ..StyleSheetFragment::default()
+      }),
+      _ => Err(()),
     }
   }
 }
@@ -704,6 +1287,7 @@ impl<'i> AtRuleParser<'i> for TakumiRuleParser {
 pub(crate) struct StyleSheet {
   pub rules: Vec<CssRule>,
   pub keyframes: Vec<KeyframesRule>,
+  pub property_rules: Vec<PropertyRule>,
 }
 
 impl StyleSheet {
@@ -717,276 +1301,54 @@ impl StyleSheet {
   pub(crate) fn parse(css: &str) -> Self {
     let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
-    let mut rule_parser = TakumiRuleParser;
+    let mut rule_parser = TakumiRuleParser {
+      current_layer: None,
+    };
     let mut rules = Vec::new();
     let mut keyframes = Vec::new();
+    let mut property_rules = Vec::new();
+    let mut declared_layers = Vec::new();
 
     let rule_list_parser = StyleSheetParser::new(&mut parser, &mut rule_parser);
 
-    for rule in rule_list_parser {
-      match rule {
-        Ok(StyleSheetRule::Style(rule)) => rules.push(*rule),
-        Ok(StyleSheetRule::Media(media_rules)) => rules.extend(media_rules),
-        Ok(StyleSheetRule::Keyframes(rule)) => keyframes.push(rule),
-        Err((_error, _slice)) => continue,
-      }
+    for fragment in rule_list_parser.filter_map(Result::ok) {
+      rules.extend(fragment.rules);
+      keyframes.extend(fragment.keyframes);
+      property_rules.extend(fragment.property_rules);
+      declared_layers.extend(fragment.declared_layers);
     }
 
-    Self { rules, keyframes }
+    let mut layer_order = std::collections::HashMap::<LayerPath, usize>::new();
+    for layer_name in declared_layers {
+      let next_order = layer_order.len();
+      layer_order.entry(layer_name).or_insert(next_order);
+    }
+    for rule in &rules {
+      if let Some(layer_name) = &rule.layer {
+        let next_order = layer_order.len();
+        layer_order.entry(layer_name.clone()).or_insert(next_order);
+      }
+    }
+    for rule in &mut rules {
+      rule.layer_order = rule
+        .layer
+        .as_ref()
+        .and_then(|layer_name| layer_order.get(layer_name).copied());
+    }
+
+    rules.retain(|rule| {
+      !rule.normal_declarations.declarations.is_empty()
+        || !rule.important_declarations.declarations.is_empty()
+    });
+
+    Self {
+      rules,
+      keyframes,
+      property_rules,
+    }
   }
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::layout::style::{
-    Color, ColorInput, ComputedStyle, Length, Style, StyleDeclaration, StyleDeclarationBlock,
-  };
-
-  fn computed_style_from_declarations(declarations: &StyleDeclarationBlock) -> ComputedStyle {
-    let mut style = Style::default();
-    for declaration in &declarations.declarations {
-      declaration.merge_into_ref(&mut style);
-    }
-    style.inherit(&ComputedStyle::default())
-  }
-
-  #[test]
-  fn test_parse_stylesheet() {
-    let css = r#"
-            .box {
-                width: 100px;
-                color: red;
-            }
-        "#;
-    let sheet = StyleSheet::parse(css);
-    assert_eq!(sheet.rules.len(), 1);
-    let rule = &sheet.rules[0];
-
-    assert_eq!(rule.selectors.slice().len(), 1);
-    assert_eq!(
-      computed_style_from_declarations(&rule.normal_declarations).width,
-      Length::Px(100.0)
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_compound_selectors_specificity() {
-    let sheet = StyleSheet::parse(
-      r#"
-        div.box { width: 10px; }
-        #hero .label { height: 20px; }
-      "#,
-    );
-    assert_eq!(sheet.rules.len(), 2);
-    assert_eq!(sheet.rules[0].selectors.slice().len(), 1);
-    assert_eq!(sheet.rules[1].selectors.slice().len(), 1);
-    assert!(sheet.rules[0].selectors.slice()[0].specificity() > 0);
-    assert!(
-      sheet.rules[1].selectors.slice()[0].specificity()
-        > sheet.rules[0].selectors.slice()[0].specificity()
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_multiple_rules() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a { width: 10px; }
-        .b { height: 20px; }
-      "#,
-    );
-
-    assert_eq!(sheet.rules.len(), 2);
-    assert_eq!(
-      computed_style_from_declarations(&sheet.rules[0].normal_declarations).width,
-      Length::Px(10.0)
-    );
-    assert_eq!(
-      computed_style_from_declarations(&sheet.rules[1].normal_declarations).height,
-      Length::Px(20.0)
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_multiple_selectors_in_rule() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a, .b { width: 12px; }
-      "#,
-    );
-
-    assert_eq!(sheet.rules.len(), 1);
-    assert_eq!(sheet.rules[0].selectors.slice().len(), 2);
-    assert_eq!(
-      computed_style_from_declarations(&sheet.rules[0].normal_declarations).width,
-      Length::Px(12.0)
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_important_declaration() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a { width: 10px !important; height: 20px; }
-      "#,
-    );
-
-    let rule = &sheet.rules[0];
-    assert_eq!(
-      computed_style_from_declarations(&rule.important_declarations).width,
-      Length::Px(10.0)
-    );
-    assert_eq!(
-      computed_style_from_declarations(&rule.normal_declarations).height,
-      Length::Px(20.0)
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_shorthand_clears_prior_longhand() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a { padding-left: 4px; padding: 10px; }
-      "#,
-    );
-
-    let declarations = &sheet.rules[0].normal_declarations;
-    assert_eq!(declarations.declarations.len(), 5);
-    assert_eq!(
-      declarations.declarations[0],
-      StyleDeclaration::padding_left(Length::Px(4.0))
-    );
-    assert_eq!(
-      declarations.declarations[1],
-      StyleDeclaration::padding_top(Length::Px(10.0))
-    );
-    assert_eq!(
-      declarations.declarations[2],
-      StyleDeclaration::padding_right(Length::Px(10.0))
-    );
-    assert_eq!(
-      declarations.declarations[3],
-      StyleDeclaration::padding_bottom(Length::Px(10.0))
-    );
-    assert_eq!(
-      declarations.declarations[4],
-      StyleDeclaration::padding_left(Length::Px(10.0))
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_webkit_alias_property() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a { -webkit-text-fill-color: rgb(255, 0, 0); }
-      "#,
-    );
-
-    let style = computed_style_from_declarations(&sheet.rules[0].normal_declarations);
-    assert_eq!(
-      style.webkit_text_fill_color,
-      Some(ColorInput::Value(Color([255, 0, 0, 255])))
-    );
-  }
-
-  #[test]
-  fn test_parse_stylesheet_unknown_property_does_not_drop_supported_declarations() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a { --local-token: 1; width: 14px; unsupported-prop: 2; height: 6px; }
-      "#,
-    );
-
-    let style = computed_style_from_declarations(&sheet.rules[0].normal_declarations);
-    assert_eq!(style.width, Length::Px(14.0));
-    assert_eq!(style.height, Length::Px(6.0));
-  }
-
-  #[test]
-  fn test_unsupported_attribute_selector_rule_is_rejected() {
-    let sheet = StyleSheet::parse(
-      r#"
-        [data-kind="hero"] { width: 10px; }
-      "#,
-    );
-
-    assert!(sheet.rules.is_empty());
-  }
-
-  #[test]
-  fn test_unsupported_pseudo_selector_rule_is_rejected() {
-    let sheet = StyleSheet::parse(
-      r#"
-        .a:hover { width: 10px; }
-      "#,
-    );
-
-    assert!(sheet.rules.is_empty());
-  }
-
-  #[test]
-  fn test_parse_keyframes_rule() {
-    let sheet = StyleSheet::parse(
-      r#"
-        @keyframes fade {
-          from { opacity: 0; }
-          50% { opacity: 0.5; }
-          to { opacity: 1; }
-        }
-      "#,
-    );
-
-    assert!(sheet.rules.is_empty());
-    assert_eq!(sheet.keyframes.len(), 1);
-    assert_eq!(sheet.keyframes[0].name, "fade");
-    assert_eq!(sheet.keyframes[0].keyframes.len(), 3);
-    assert_eq!(sheet.keyframes[0].keyframes[0].offsets, vec![0.0]);
-    assert_eq!(sheet.keyframes[0].keyframes[1].offsets, vec![0.5]);
-    assert_eq!(sheet.keyframes[0].keyframes[2].offsets, vec![1.0]);
-  }
-
-  #[test]
-  fn test_parse_media_rule_with_viewport_features() {
-    let sheet = StyleSheet::parse(
-      r#"
-        @media screen and (min-width: 600px) and (orientation: landscape) {
-          .card { width: 100px; }
-        }
-      "#,
-    );
-
-    assert_eq!(sheet.rules.len(), 1);
-    assert!(sheet.keyframes.is_empty());
-    assert!(
-      sheet.rules[0]
-        .media_queries
-        .as_ref()
-        .is_some_and(|media| media.matches(Viewport::new(Some(800), Some(600))))
-    );
-    assert!(
-      !sheet.rules[0]
-        .media_queries
-        .as_ref()
-        .is_some_and(|media| media.matches(Viewport::new(Some(500), Some(800))))
-    );
-  }
-
-  #[test]
-  fn test_parse_media_rule_with_comma_list() {
-    let sheet = StyleSheet::parse(
-      r#"
-        @media (max-width: 480px), (min-width: 1024px) {
-          .card { width: 100px; }
-        }
-      "#,
-    );
-
-    let Some(media) = sheet.rules[0].media_queries.as_ref() else {
-      unreachable!("expected media queries on parsed rule");
-    };
-    assert!(media.matches(Viewport::new(Some(400), Some(800))));
-    assert!(media.matches(Viewport::new(Some(1280), Some(800))));
-    assert!(!media.matches(Viewport::new(Some(800), Some(800))));
-  }
-}
+#[path = "selector_tests.rs"]
+mod tests;

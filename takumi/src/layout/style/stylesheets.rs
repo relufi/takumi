@@ -7,6 +7,8 @@ use serde::de::IgnoredAny;
 use smallvec::SmallVec;
 use taffy::{Point, Rect, Size, prelude::FromLength};
 
+#[cfg(feature = "css_stylesheet_parsing")]
+use crate::layout::style::selector::PropertyRule;
 use crate::{
   layout::{
     inline::InlineBrush,
@@ -749,6 +751,8 @@ macro_rules! define_style {
       #[derive(Clone, Debug, Default)]
       pub struct ComputedStyle {
         pub(crate) custom_properties: HashMap<String, String>,
+        #[cfg(feature = "css_stylesheet_parsing")]
+        pub(crate) registered_custom_properties: HashMap<String, PropertyRule>,
         $(pub(crate) $longhand: $longhand_ty,)*
       }
 
@@ -772,6 +776,8 @@ macro_rules! define_style {
         pub(crate) fn from_parent(parent: &Self) -> Self {
           Self {
             custom_properties: parent.custom_properties.clone(),
+            #[cfg(feature = "css_stylesheet_parsing")]
+            registered_custom_properties: parent.registered_custom_properties.clone(),
             $($longhand: define_inherited_default!(parent.$longhand $(, $longhand_inherit)?),)*
           }
         }
@@ -927,7 +933,7 @@ macro_rules! define_style {
             Self::CustomProperty(name, raw_value) => {
               style
                 .custom_properties
-                .insert(name.clone(), raw_value.clone());
+                .insert(name.to_owned(), raw_value.to_owned());
             }
             Self::Deferred(deferred) => apply_deferred_declaration(style, None, deferred),
             $(Self::[<$longhand:camel>](value) => style.$longhand.clone_from(value),)*
