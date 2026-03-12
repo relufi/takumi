@@ -1251,7 +1251,15 @@ impl MakeComputed for FontFamily {}
 
 impl<'i> FromCss<'i> for FontFamily {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
-    Ok(FontFamily(input.current_line().to_string()))
+    input.skip_whitespace();
+    let position = input.position();
+    let _ = input.expect_ident_or_string()?;
+    while !input.is_exhausted() {
+      input.expect_comma()?;
+      let _ = input.expect_ident_or_string()?;
+    }
+    let body = input.slice_from(position);
+    Ok(FontFamily(body.to_string()))
   }
 
   fn from_str(source: &'i str) -> ParseResult<'i, Self> {
