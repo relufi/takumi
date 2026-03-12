@@ -1,8 +1,8 @@
-use std::{collections::HashMap, mem::replace, sync::Arc};
+use std::{collections::HashMap, mem::replace, ops::Range, sync::Arc};
 
 use derive_builder::Builder;
 use image::RgbaImage;
-use parley::PositionedLayoutItem;
+use parley::{GlyphRun, PositionedLayoutItem};
 use serde::Serialize;
 use taffy::{AvailableSpace, Layout, NodeId, TaffyError, geometry::Size};
 
@@ -13,8 +13,8 @@ use crate::{
   layout::{
     Viewport,
     inline::{
-      InlineLayoutStage, ProcessedInlineSpan, collect_inline_items, create_inline_constraint,
-      create_inline_layout,
+      InlineBrush, InlineLayoutStage, ProcessedInlineSpan, collect_inline_items,
+      create_inline_constraint, create_inline_layout,
     },
     node::Node,
     style::{
@@ -101,6 +101,40 @@ pub struct MeasuredNode {
   pub children: Vec<MeasuredNode>,
   /// Text runs for inline layouts.
   pub runs: Vec<MeasuredTextRun>,
+}
+
+fn measured_run_text<'a, N: Node<N>>(
+  text: &'a str,
+  spans: &[ProcessedInlineSpan<'_, '_, N>],
+  glyph_run: &GlyphRun<'_, InlineBrush>,
+) -> &'a str {
+  let text_range = glyph_run.run().text_range();
+  let Some(span_id) = glyph_run.style().brush.source_span_id else {
+    return slice_text_at_char_boundaries(text, text_range);
+  };
+
+  let Some(ProcessedInlineSpan::Text { byte_range, .. }) = spans.get(span_id as usize) else {
+    return slice_text_at_char_boundaries(text, text_range);
+  };
+
+  let start = text_range.start.max(byte_range.start);
+  let end = text_range.end.min(byte_range.end);
+  slice_text_at_char_boundaries(text, start..end)
+}
+
+fn slice_text_at_char_boundaries(text: &str, byte_range: Range<usize>) -> &str {
+  if byte_range.start >= byte_range.end || byte_range.start >= text.len() {
+    return "";
+  }
+
+  let end = byte_range.end.min(text.len());
+  let start = text.ceil_char_boundary(byte_range.start.min(end));
+  let end = text.floor_char_boundary(end);
+  if start >= end {
+    return "";
+  }
+
+  &text[start..end]
 }
 
 struct TraversalEnter {
@@ -245,8 +279,10 @@ fn collect_measure_result<'g, Nodes: Node<Nodes>>(
             for item in line.items() {
               match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
-                  let text_range = glyph_run.run().text_range();
-                  let text = &text[text_range];
+                  let text = measured_run_text(&text, &spans, &glyph_run);
+                  if text.is_empty() {
+                    continue;
+                  }
                   let run = glyph_run.run();
                   let metrics = run.metrics();
 
@@ -828,7 +864,7 @@ fn build_stylesheets(stylesheets: Vec<String>, keyframes: Vec<KeyframesRule>) ->
 mod tests {
   use super::{
     RenderOptionsBuilder, SequentialScene, SequentialSceneBuilder, render_sequence_animation,
-    resolve_scene_at_time,
+    resolve_scene_at_time, slice_text_at_char_boundaries,
   };
   use crate::{
     GlobalContext,
@@ -936,6 +972,16 @@ mod tests {
         .sum::<u64>(),
       150
     );
+  }
+
+  #[test]
+  fn slice_text_at_char_boundaries_trims_invalid_utf8_edges() {
+    let text = "a🦀b";
+
+    assert_eq!(slice_text_at_char_boundaries(text, 0..3), "a");
+    assert_eq!(slice_text_at_char_boundaries(text, 1..5), "🦀");
+    assert_eq!(slice_text_at_char_boundaries(text, 2..5), "");
+    assert_eq!(slice_text_at_char_boundaries(text, 0..text.len()), text);
   }
 
   #[test]
