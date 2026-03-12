@@ -33,11 +33,12 @@ impl<'i> FromCss<'i> for FontFeatureSettings {
 
       let tag = tag_from_str_lossy(tag_name);
       let value = if input.is_exhausted() {
-        1f32
+        1.0
       } else {
+        let location = input.current_source_location();
         match input.next()? {
-          Token::Ident(st) if st.as_ref() == "on" => 1f32,
-          Token::Ident(st) if st.as_ref() == "off" => 0f32,
+          Token::Ident(st) if st.as_ref() == "on" => 1.0,
+          Token::Ident(st) if st.as_ref() == "off" => 0.0,
           Token::Number { value, .. } => *value,
           token => {
             return Err(Self::unexpected_token_error(location, token));
