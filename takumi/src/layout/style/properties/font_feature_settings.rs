@@ -33,23 +33,22 @@ impl<'i> FromCss<'i> for FontFeatureSettings {
 
       let tag = tag_from_str_lossy(tag_name);
       let value = if input.is_exhausted() {
-        1.0
+        1
       } else {
         let location = input.current_source_location();
         match input.next()? {
-          Token::Ident(st) if st.as_ref() == "on" => 1.0,
-          Token::Ident(st) if st.as_ref() == "off" => 0.0,
-          Token::Number { value, .. } => *value,
+          Token::Ident(st) if st.as_ref() == "on" => 1,
+          Token::Ident(st) if st.as_ref() == "off" => 0,
+          Token::Number {
+            value, int_value, ..
+          } => int_value.map(|v| v as u16).unwrap_or(*value as u16),
           token => {
             return Err(Self::unexpected_token_error(location, token));
           }
         }
       };
 
-      Ok(FontFeature {
-        tag,
-        value: value as u16,
-      })
+      Ok(FontFeature { tag, value })
     })?;
 
     Ok(list.into_boxed_slice())
