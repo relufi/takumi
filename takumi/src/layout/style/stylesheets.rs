@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, marker::PhantomData};
+use std::{borrow::Cow, collections::HashMap, marker::PhantomData, str::FromStr};
 
 use cssparser::{Parser, ParserInput, Token, match_ignore_ascii_case};
 use parley::{FontSettings, TextStyle};
@@ -8,14 +8,17 @@ use smallvec::SmallVec;
 use taffy::{Point, Rect, Size, prelude::FromLength};
 
 #[cfg(feature = "css_stylesheet_parsing")]
-use crate::layout::style::selector::PropertyRule;
+use crate::layout::style::selector::{PropertyRule, StyleDeclarationParser};
 use crate::{
+  error::StyleDeclarationBlockParseError,
   layout::{
     inline::InlineBrush,
     style::{RawCssInput, RawCssValueSeed, properties::*},
   },
   rendering::{RenderContext, SizedShadow, Sizing},
 };
+#[cfg(feature = "css_stylesheet_parsing")]
+use cssparser::RuleBodyParser;
 
 macro_rules! define_inherited_default {
   ($parent:expr, $inherit:tt) => {
@@ -1758,12 +1761,72 @@ impl StyleDeclarationBlock {
   }
 
   /// Iterates over the declarations in source order.
-  pub(crate) fn iter(&self) -> std::slice::Iter<'_, StyleDeclaration> {
+  pub fn iter(&self) -> std::slice::Iter<'_, StyleDeclaration> {
     self.declarations.iter()
   }
 
   pub(crate) fn parse<'i>(name: &str, input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
     parse_style_declaration(name, input)
+  }
+}
+
+/// Owning iterator over declarations in source order.
+pub struct StyleDeclarationBlockIntoIter {
+  declarations: smallvec::IntoIter<[StyleDeclaration; 8]>,
+}
+
+impl Iterator for StyleDeclarationBlockIntoIter {
+  type Item = StyleDeclaration;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    self.declarations.next()
+  }
+}
+
+impl IntoIterator for StyleDeclarationBlock {
+  type Item = StyleDeclaration;
+  type IntoIter = StyleDeclarationBlockIntoIter;
+
+  fn into_iter(self) -> Self::IntoIter {
+    Self::IntoIter {
+      declarations: self.declarations.into_iter(),
+    }
+  }
+}
+
+impl<'a> IntoIterator for &'a StyleDeclarationBlock {
+  type Item = &'a StyleDeclaration;
+  type IntoIter = std::slice::Iter<'a, StyleDeclaration>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.iter()
+  }
+}
+
+#[cfg(feature = "css_stylesheet_parsing")]
+impl FromStr for StyleDeclarationBlock {
+  type Err = StyleDeclarationBlockParseError;
+
+  fn from_str(input: &str) -> Result<Self, Self::Err> {
+    let mut parser_input = ParserInput::new(input);
+    let mut parser = Parser::new(&mut parser_input);
+    let mut declaration_parser = StyleDeclarationParser;
+    let mut block = Self::default();
+
+    for result in RuleBodyParser::new(&mut parser, &mut declaration_parser) {
+      match result {
+        Ok(declarations) => block.append(declarations),
+        Err((error, context)) => {
+          return Err(StyleDeclarationBlockParseError::InvalidDeclarationBlock {
+            input: input.to_owned(),
+            context: context.to_owned(),
+            reason: format!("{error:?}"),
+          });
+        }
+      }
+    }
+
+    Ok(block)
   }
 }
 
@@ -2158,7 +2221,7 @@ impl ComputedStyle {
 
 #[cfg(test)]
 mod tests {
-  use std::{collections::HashMap, rc::Rc};
+  use std::{collections::HashMap, rc::Rc, str::FromStr};
 
   use cssparser::{Parser, ParserInput};
   use taffy::Size;
@@ -2324,6 +2387,66 @@ mod tests {
     let declarations = parse_declarations("not-a-real-property", "123");
 
     assert!(declarations.iter().next().is_none());
+  }
+
+  #[cfg(feature = "css_stylesheet_parsing")]
+  #[test]
+  fn style_declaration_block_from_str_parses_multiple_declarations() {
+    let declarations =
+      StyleDeclarationBlock::from_str("color: #ff0000; padding: 1px 2px;").unwrap();
+
+    assert_eq!(
+      declarations.iter().collect::<Vec<_>>(),
+      vec![
+        &StyleDeclaration::color(ColorInput::Value(Color([255, 0, 0, 255]))),
+        &StyleDeclaration::padding_top(Length::Px(1.0)),
+        &StyleDeclaration::padding_right(Length::Px(2.0)),
+        &StyleDeclaration::padding_bottom(Length::Px(1.0)),
+        &StyleDeclaration::padding_left(Length::Px(2.0)),
+      ]
+    );
+  }
+
+  #[cfg(feature = "css_stylesheet_parsing")]
+  #[test]
+  fn style_declaration_block_from_str_tracks_important_declarations() {
+    let declarations = StyleDeclarationBlock::from_str("color: inherit !important;").unwrap();
+
+    assert_eq!(
+      declarations.iter().collect::<Vec<_>>(),
+      vec![&StyleDeclaration::CssWideKeyword(
+        LonghandId::Color,
+        CssWideKeyword::Inherit,
+      )]
+    );
+    assert!(
+      declarations
+        .importance
+        .longhands
+        .contains(&LonghandId::Color)
+    );
+  }
+
+  #[test]
+  fn style_declaration_block_supports_reference_iteration() {
+    let declarations = parse_declarations("padding", "1px 2px");
+
+    assert_eq!((&declarations).into_iter().count(), 4);
+  }
+
+  #[test]
+  fn style_declaration_block_into_iter_yields_owned_values() {
+    let declarations = parse_declarations("padding", "1px 2px");
+
+    assert_eq!(
+      declarations.into_iter().collect::<Vec<_>>(),
+      vec![
+        StyleDeclaration::padding_top(Length::Px(1.0)),
+        StyleDeclaration::padding_right(Length::Px(2.0)),
+        StyleDeclaration::padding_bottom(Length::Px(1.0)),
+        StyleDeclaration::padding_left(Length::Px(2.0)),
+      ]
+    );
   }
 
   #[test]

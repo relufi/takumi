@@ -4,6 +4,21 @@ use thiserror::Error;
 /// Alias to [`TakumiError`].
 pub type Error = TakumiError;
 
+/// Errors raised while parsing a CSS declaration block string.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum StyleDeclarationBlockParseError {
+  /// The declaration block could not be parsed as CSS declarations.
+  #[error("failed to parse CSS declaration block `{input}` near `{context}`: {reason}")]
+  InvalidDeclarationBlock {
+    /// The original declaration block input.
+    input: String,
+    /// The declaration slice being parsed when the error was raised.
+    context: String,
+    /// The parser failure rendered as text.
+    reason: String,
+  },
+}
+
 /// Structured errors raised by the WebP encoding and container assembly paths.
 #[derive(Error, Debug)]
 pub enum WebPError {
