@@ -1,6 +1,7 @@
 use crate::layout::style::{CssToken, FromCss, MakeComputed, ParseResult};
-use cssparser::{BasicParseErrorKind, Parser};
+use cssparser::{Parser, Token};
 use parley::FontVariation;
+use swash::tag_from_str_lossy;
 
 /// Controls variable font axis values via CSS font-variation-settings property.
 ///
@@ -18,23 +19,25 @@ impl<'i> FromCss<'i> for FontVariationSettings {
     {
       return Ok(Box::new([]));
     }
+
     let list = input.parse_comma_separated(|input| {
+      let location = input.current_source_location();
       let tag_name = input.expect_string()?;
+
       if tag_name.len() != 4 || !tag_name.is_ascii() {
-        let err_token = tag_name.clone();
-        return Err(input.new_error::<std::borrow::Cow<str>>(
-          BasicParseErrorKind::UnexpectedToken(cssparser::Token::QuotedString(err_token)),
+        return Err(Self::unexpected_token_error(
+          location,
+          &Token::QuotedString(tag_name.clone()),
         ));
       }
-      let tag = swash::tag_from_str_lossy(tag_name);
+
+      let tag = tag_from_str_lossy(tag_name);
       let value = input.expect_number()?;
+
       Ok(FontVariation { tag, value })
     })?;
-    Ok(list.into_boxed_slice())
-  }
 
-  fn from_str(source: &'i str) -> ParseResult<'i, Self> {
-    Ok(Box::from_iter(FontVariation::parse_list(source)))
+    Ok(list.into_boxed_slice())
   }
 
   fn valid_tokens() -> &'static [CssToken] {

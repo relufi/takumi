@@ -103,7 +103,7 @@ use cssparser::{
 };
 use fast_image_resize::ResizeAlg;
 use image::imageops::FilterType;
-use parley::{Alignment, FontStack};
+use parley::{Alignment, FontStack, GenericFamily};
 use std::borrow::Cow;
 use zeno::Join;
 
@@ -1245,25 +1245,29 @@ declare_enum_from_css_impl!(
 /// Represents a font family for text rendering.
 /// Multi value fallback is supported.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FontFamily(String);
+pub struct FontFamily(Box<[FontFamilyToken]>);
+
+#[derive(Debug, Clone, PartialEq)]
+enum FontFamilyToken {
+  Owned(String),
+  Generic(GenericFamily),
+}
 
 impl MakeComputed for FontFamily {}
 
 impl<'i> FromCss<'i> for FontFamily {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
-    input.skip_whitespace();
-    let position = input.position();
-    let _ = input.expect_ident_or_string()?;
-    while !input.is_exhausted() {
-      input.expect_comma()?;
-      let _ = input.expect_ident_or_string()?;
-    }
-    let body = input.slice_from(position);
-    Ok(FontFamily(body.to_string()))
-  }
+    let list = input.parse_comma_separated(|input| {
+      let token = input.expect_ident_or_string()?;
 
-  fn from_str(source: &'i str) -> ParseResult<'i, Self> {
-    Ok(FontFamily(source.to_string()))
+      if let Some(generic) = GenericFamily::parse(token) {
+        return Ok(FontFamilyToken::Generic(generic));
+      }
+
+      Ok(FontFamilyToken::Owned(token.to_string()))
+    })?;
+
+    Ok(FontFamily(list.into_boxed_slice()))
   }
 
   fn valid_tokens() -> &'static [CssToken] {
@@ -1277,9 +1281,9 @@ impl<'i> FromCss<'i> for FontFamily {
 impl TailwindPropertyParser for FontFamily {
   fn parse_tw(token: &str) -> Option<Self> {
     match_ignore_ascii_case! {token,
-      "sans" => Some(FontFamily("sans-serif".to_string())),
-      "serif" => Some(FontFamily("serif".to_string())),
-      "mono" => Some(FontFamily("monospace".to_string())),
+      "sans" => Some(GenericFamily::SansSerif.into()),
+      "serif" => Some(GenericFamily::Serif.into()),
+      "mono" => Some(GenericFamily::Monospace.into()),
       _ => None,
     }
   }
@@ -1287,25 +1291,50 @@ impl TailwindPropertyParser for FontFamily {
 
 impl Default for FontFamily {
   fn default() -> Self {
-    Self("sans-serif".to_string())
+    GenericFamily::SansSerif.into()
   }
 }
 
 impl<'a> From<FontFamily> for FontStack<'a> {
   fn from(family: FontFamily) -> Self {
-    FontStack::Source(family.0.into())
+    FontStack::List(
+      family
+        .0
+        .into_iter()
+        .map(|token| match token {
+          FontFamilyToken::Owned(s) => parley::FontFamily::Named(s.into()),
+          FontFamilyToken::Generic(g) => parley::FontFamily::Generic(g),
+        })
+        .collect(),
+    )
   }
 }
 
 impl<'a> From<&'a FontFamily> for FontStack<'a> {
   fn from(family: &'a FontFamily) -> Self {
-    FontStack::Source(family.0.as_str().into())
+    FontStack::List(
+      family
+        .0
+        .as_ref()
+        .iter()
+        .map(|token| match token {
+          FontFamilyToken::Owned(s) => parley::FontFamily::Named(s.into()),
+          FontFamilyToken::Generic(g) => parley::FontFamily::Generic(*g),
+        })
+        .collect(),
+    )
   }
 }
 
 impl From<&str> for FontFamily {
   fn from(family: &str) -> Self {
-    FontFamily(family.to_string())
+    FontFamily(Box::new([FontFamilyToken::Owned(family.to_string())]))
+  }
+}
+
+impl From<GenericFamily> for FontFamily {
+  fn from(generic: GenericFamily) -> Self {
+    FontFamily(Box::new([FontFamilyToken::Generic(generic)]))
   }
 }
 
