@@ -1958,7 +1958,7 @@ impl ComputedStyle {
 
   #[inline]
   fn resolved_gap(&self) -> SpacePair<Length<false>> {
-    SpacePair::from_pair(self.row_gap, self.column_gap)
+    SpacePair::from_pair(self.column_gap,self.row_gap)
   }
 
   #[inline]
