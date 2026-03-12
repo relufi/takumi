@@ -1010,14 +1010,14 @@ define_style! {
     min_width: Length,
     min_height: Length,
     aspect_ratio: AspectRatio,
-    padding_top: Length<false>,
-    padding_right: Length<false>,
-    padding_bottom: Length<false>,
-    padding_left: Length<false>,
-    margin_top: Length<false>,
-    margin_right: Length<false>,
-    margin_bottom: Length<false>,
-    margin_left: Length<false>,
+    padding_top: LengthDefaultsToZero,
+    padding_right: LengthDefaultsToZero,
+    padding_bottom: LengthDefaultsToZero,
+    padding_left: LengthDefaultsToZero,
+    margin_top: LengthDefaultsToZero,
+    margin_right: LengthDefaultsToZero,
+    margin_bottom: LengthDefaultsToZero,
+    margin_left: LengthDefaultsToZero,
     top: Length,
     right: Length,
     bottom: Length,
@@ -1041,14 +1041,14 @@ define_style! {
     mask_size: BackgroundSizes,
     mask_position: BackgroundPositions,
     mask_repeat: BackgroundRepeats,
-    column_gap: Length<false>,
-    row_gap: Length<false>,
+    column_gap: LengthDefaultsToZero,
+    row_gap: LengthDefaultsToZero,
     flex_grow: Option<FlexGrow>,
     flex_shrink: Option<FlexGrow>,
-    border_top_left_radius: SpacePair<Length<false>>,
-    border_top_right_radius: SpacePair<Length<false>>,
-    border_bottom_right_radius: SpacePair<Length<false>>,
-    border_bottom_left_radius: SpacePair<Length<false>>,
+    border_top_left_radius: SpacePair<LengthDefaultsToZero>,
+    border_top_right_radius: SpacePair<LengthDefaultsToZero>,
+    border_bottom_right_radius: SpacePair<LengthDefaultsToZero>,
+    border_bottom_left_radius: SpacePair<LengthDefaultsToZero>,
     border_top_width: Length,
     border_right_width: Length,
     border_bottom_width: Length,
@@ -1096,7 +1096,7 @@ define_style! {
     font_synthesis_style: FontSynthesic where inherit = true,
     line_clamp: Option<LineClamp> where inherit = true,
     text_align: TextAlign where inherit = true,
-    webkit_text_stroke_width: Option<Length<false>> where inherit = true,
+    webkit_text_stroke_width: Option<LengthDefaultsToZero> where inherit = true,
     webkit_text_stroke_color: Option<ColorInput> where inherit = true,
     webkit_text_fill_color: Option<ColorInput> where inherit = true,
     stroke_linejoin: LineJoin where inherit = true,
@@ -1125,7 +1125,7 @@ define_style! {
     animation: Animations => [AnimationName, AnimationDuration, AnimationDelay, AnimationTimingFunction, AnimationIterationCount, AnimationDirection, AnimationFillMode, AnimationPlayState] |value, target| {
       expand_animation_shorthand(value, target);
     },
-    padding: Sides<Length<false>> => [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft] |value, target| {
+    padding: Sides<LengthDefaultsToZero> => [PaddingTop, PaddingRight, PaddingBottom, PaddingLeft] |value, target| {
       push_four_side_declarations!(
         target,
         value.0,
@@ -1135,13 +1135,13 @@ define_style! {
         padding_left
       );
     },
-    padding_inline: SpacePair<Length<false>> => [PaddingLeft, PaddingRight] |value, target| {
+    padding_inline: SpacePair<LengthDefaultsToZero> => [PaddingLeft, PaddingRight] |value, target| {
       push_axis_declarations!(target, value, padding_left, padding_right);
     },
-    padding_block: SpacePair<Length<false>> => [PaddingTop, PaddingBottom] |value, target| {
+    padding_block: SpacePair<LengthDefaultsToZero> => [PaddingTop, PaddingBottom] |value, target| {
       push_axis_declarations!(target, value, padding_top, padding_bottom);
     },
-    margin: Sides<Length<false>> => [MarginTop, MarginRight, MarginBottom, MarginLeft] |value, target| {
+    margin: Sides<LengthDefaultsToZero> => [MarginTop, MarginRight, MarginBottom, MarginLeft] |value, target| {
       push_four_side_declarations!(
         target,
         value.0,
@@ -1151,10 +1151,10 @@ define_style! {
         margin_left
       );
     },
-    margin_inline: SpacePair<Length<false>> => [MarginLeft, MarginRight] |value, target| {
+    margin_inline: SpacePair<LengthDefaultsToZero> => [MarginLeft, MarginRight] |value, target| {
       push_axis_declarations!(target, value, margin_left, margin_right);
     },
-    margin_block: SpacePair<Length<false>> => [MarginTop, MarginBottom] |value, target| {
+    margin_block: SpacePair<LengthDefaultsToZero> => [MarginTop, MarginBottom] |value, target| {
       push_axis_declarations!(target, value, margin_top, margin_bottom);
     },
     inset: Sides<Length> => [Top, Right, Bottom, Left] |value, target| {
@@ -1169,7 +1169,7 @@ define_style! {
     mask: Backgrounds => [MaskImage, MaskPosition, MaskSize, MaskRepeat] |value, target| {
       expand_mask_shorthand(value, target);
     },
-    gap: SpacePair<Length<false>> => [RowGap, ColumnGap] |value, target| {
+    gap: SpacePair<LengthDefaultsToZero> => [RowGap, ColumnGap] |value, target| {
       // Special case: gap is reversed in the declaration order (y-first)
       push_axis_declarations!(target, value, column_gap, row_gap);
     },
@@ -1953,7 +1953,7 @@ impl ComputedStyle {
   }
 
   #[inline]
-  fn resolved_gap(&self) -> SpacePair<Length<false>> {
+  fn resolved_gap(&self) -> SpacePair<LengthDefaultsToZero> {
     SpacePair::from_pair(self.row_gap, self.column_gap)
   }
 

@@ -1,7 +1,7 @@
 use cssparser::Parser;
 
 use crate::{
-  layout::style::{ColorInput, CssToken, FromCss, MakeComputed, ParseResult, properties::Length},
+  layout::style::{ColorInput, CssToken, FromCss, LengthDefaultsToZero, MakeComputed, ParseResult},
   rendering::Sizing,
 };
 
@@ -11,7 +11,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStroke {
   /// Stroke width.
-  pub width: Length<false>,
+  pub width: LengthDefaultsToZero,
   /// Optional stroke color.
   pub color: Option<ColorInput>,
 }
@@ -19,7 +19,7 @@ pub struct TextStroke {
 impl<'i> FromCss<'i> for TextStroke {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
     // Parse width first
-    let width = Length::from_css(input)?;
+    let width = LengthDefaultsToZero::from_css(input)?;
     // Try optional color
     let color = input.try_parse(ColorInput::from_css).ok();
 

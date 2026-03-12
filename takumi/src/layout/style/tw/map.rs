@@ -15,7 +15,7 @@ pub enum PropertyParser {
   BgSize(fn(BackgroundSize) -> TailwindProperty),
   BgImage(fn(BackgroundImage) -> TailwindProperty),
   LengthAuto(fn(Length) -> TailwindProperty),
-  LengthZero(fn(Length<false>) -> TailwindProperty),
+  LengthZero(fn(LengthDefaultsToZero) -> TailwindProperty),
   FontWeight(fn(FontWeight) -> TailwindProperty),
   Justify(fn(JustifyContent) -> TailwindProperty),
   Align(fn(AlignItems) -> TailwindProperty),

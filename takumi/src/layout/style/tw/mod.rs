@@ -565,11 +565,11 @@ pub enum TailwindProperty {
   /// `background-image` property.
   BackgroundImage(BackgroundImage),
   /// `gap` property.
-  Gap(Length<false>),
+  Gap(LengthDefaultsToZero),
   /// `column-gap` property.
-  GapX(Length<false>),
+  GapX(LengthDefaultsToZero),
   /// `row-gap` property.
-  GapY(Length<false>),
+  GapY(LengthDefaultsToZero),
   /// `grid-auto-flow` property.
   GridAutoFlow(GridAutoFlow),
   /// `grid-auto-columns` property.
@@ -673,33 +673,33 @@ pub enum TailwindProperty {
   /// `transform-origin` property.
   TransformOrigin(TransformOrigin),
   /// `margin` property.
-  Margin(Length<false>),
+  Margin(LengthDefaultsToZero),
   /// `margin-inline` property.
-  MarginX(Length<false>),
+  MarginX(LengthDefaultsToZero),
   /// `margin-block` property.
-  MarginY(Length<false>),
+  MarginY(LengthDefaultsToZero),
   /// `margin-top` property.
-  MarginTop(Length<false>),
+  MarginTop(LengthDefaultsToZero),
   /// `margin-right` property.
-  MarginRight(Length<false>),
+  MarginRight(LengthDefaultsToZero),
   /// `margin-bottom` property.
-  MarginBottom(Length<false>),
+  MarginBottom(LengthDefaultsToZero),
   /// `margin-left` property.
-  MarginLeft(Length<false>),
+  MarginLeft(LengthDefaultsToZero),
   /// `padding` property.
-  Padding(Length<false>),
+  Padding(LengthDefaultsToZero),
   /// `padding-inline` property.
-  PaddingX(Length<false>),
+  PaddingX(LengthDefaultsToZero),
   /// `padding-block` property.
-  PaddingY(Length<false>),
+  PaddingY(LengthDefaultsToZero),
   /// `padding-top` property.
-  PaddingTop(Length<false>),
+  PaddingTop(LengthDefaultsToZero),
   /// `padding-right` property.
-  PaddingRight(Length<false>),
+  PaddingRight(LengthDefaultsToZero),
   /// `padding-bottom` property.
-  PaddingBottom(Length<false>),
+  PaddingBottom(LengthDefaultsToZero),
   /// `padding-left` property.
-  PaddingLeft(Length<false>),
+  PaddingLeft(LengthDefaultsToZero),
   /// `inset` property.
   Inset(Length),
   /// `inset-inline` property.

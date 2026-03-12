@@ -685,7 +685,7 @@ impl TailwindPropertyParser for BackgroundClip {
 ///
 /// Each corner has independent horizontal and vertical radii, allowing for both circular and elliptical shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct BorderRadius(pub Sides<SpacePair<Length<false>>>);
+pub struct BorderRadius(pub Sides<SpacePair<LengthDefaultsToZero>>);
 
 impl From<f32> for BorderRadius {
   fn from(value: f32) -> Self {
@@ -748,7 +748,7 @@ impl<'i> FromCss<'i> for Box<BorderRadius> {
 
 impl<'i> FromCss<'i> for BorderRadius {
   fn from_css(input: &mut Parser<'i, '_>) -> ParseResult<'i, Self> {
-    let widths: Sides<Length<false>> = Sides::from_css(input)?;
+    let widths: Sides<LengthDefaultsToZero> = Sides::from_css(input)?;
 
     let heights = if input.try_parse(|input| input.expect_delim('/')).is_ok() {
       Sides::from_css(input)?

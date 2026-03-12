@@ -16,7 +16,9 @@ use crate::keyframes::{KeyframePreludeParseError, parse_keyframe_prelude};
 use crate::{
   layout::{
     Viewport,
-    style::{CalcArena, FromCss, KeyframeRule, KeyframesRule, Length, StyleDeclarationBlock},
+    style::{
+      CalcArena, FromCss, KeyframeRule, KeyframesRule, LengthDefaultsToZero, StyleDeclarationBlock,
+    },
   },
   rendering::Sizing,
 };
@@ -558,8 +560,8 @@ enum MediaOrientation {
 
 #[derive(Debug, Clone, PartialEq)]
 enum MediaFeature {
-  Width(MediaFeatureComparison, Length<false>),
-  Height(MediaFeatureComparison, Length<false>),
+  Width(MediaFeatureComparison, LengthDefaultsToZero),
+  Height(MediaFeatureComparison, LengthDefaultsToZero),
   Orientation(MediaOrientation),
 }
 
@@ -773,7 +775,7 @@ fn parse_media_feature<'i, 't>(
     MediaFeatureComparison::Equal
   };
 
-  let length = Length::<false>::from_css(input).map_err(ParseError::into)?;
+  let length = LengthDefaultsToZero::from_css(input).map_err(ParseError::into)?;
 
   if feature_name.eq_ignore_ascii_case("width")
     || feature_name.eq_ignore_ascii_case("min-width")

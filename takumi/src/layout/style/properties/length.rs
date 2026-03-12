@@ -509,6 +509,9 @@ fn is_near_zero(value: f32) -> bool {
   value.abs() <= CALC_ZERO_EPSILON
 }
 
+/// A length value that defaults to zero instead of auto.
+pub type LengthDefaultsToZero = Length<false>;
+
 /// Represents a value that can be a specific length, percentage, or automatic.
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Length<const DEFAULT_AUTO: bool = true> {

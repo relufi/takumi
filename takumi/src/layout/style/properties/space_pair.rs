@@ -4,7 +4,8 @@ use taffy::{LengthPercentage, Point, Size};
 
 use crate::{
   layout::style::{
-    CssToken, FromCss, Length, MakeComputed, Overflow, ParseResult, merge_enum_values,
+    CssToken, FromCss, Length, LengthDefaultsToZero, MakeComputed, Overflow, ParseResult,
+    merge_enum_values,
   },
   rendering::Sizing,
 };
@@ -95,7 +96,7 @@ impl SpacePair<Overflow> {
 }
 
 /// A pair of values for horizontal and vertical border radii.
-pub type BorderRadiusPair = SpacePair<Length<false>>;
+pub type BorderRadiusPair = SpacePair<LengthDefaultsToZero>;
 
 impl BorderRadiusPair {
   pub(crate) fn to_px(self, sizing: &Sizing, border_box: Size<f32>) -> SpacePair<f32> {
